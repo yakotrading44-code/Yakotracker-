@@ -408,7 +408,7 @@ let recordsPage = 1;
 
 function renderRecords() {
   const allRows = groupRecords(filteredRecords());
-  const size = Number($("#page-size").value) || allRows.length || 1;
+  const size = Number($("#page-size").value) || 10;
   const pages = Math.max(1, Math.ceil(allRows.length / size));
   recordsPage = Math.min(Math.max(1, recordsPage), pages);
   const start = (recordsPage - 1) * size;
@@ -464,7 +464,7 @@ function renderRecords() {
   renderRecords();
 }));
 
-$("#page-size").value = String(Settings.get("pageSize", 10));
+$("#page-size").value = [10, 20, 50, 100].includes(Settings.get("pageSize", 10)) ? String(Settings.get("pageSize", 10)) : "10";
 $("#page-size").onchange = () => {
   Settings.set("pageSize", Number($("#page-size").value));
   recordsPage = 1;
