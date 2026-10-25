@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f5132">
+  <title>Yako Trading Tracker</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js"></script>
+  <script src="vendor/supabase.js"></script>
+  <script src="vendor/chart.umd.js"></script>
+</head>
+<body>
+  <!-- Sign in (only used when online storage is set up) -->
+  <section id="auth-screen" class="screen" hidden>
+    <div class="auth-card">
+      <h1>Yako Trading</h1>
+      <p class="muted">Profit &amp; expense tracker</p>
+      <form id="auth-form">
+        <label>Email <input type="email" id="auth-email" required autocomplete="email"></label>
+        <label>Password <input type="password" id="auth-password" required minlength="6" autocomplete="current-password"></label>
+        <button type="submit" class="btn primary" id="auth-submit">Sign in</button>
+        <button type="button" class="btn link" id="auth-toggle">New here? Create an account</button>
+        <p id="auth-msg" class="msg"></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- Main app -->
+  <section id="app-screen" class="screen" hidden>
+    <header class="topbar">
+      <div>
+        <strong>Yako Trading</strong>
+        <span id="storage-badge" class="badge"></span>
+      </div>
+      <button class="btn primary small" id="add-record-top">+ Add record</button>
+    </header>
+
+    <main>
+      <!-- Dashboard -->
+      <div id="tab-dashboard" class="tab">
+        <div class="row between wrap">
+          <h2>Overview</h2>
+          <select id="period">
+            <option value="this-month">This month</option>
+            <option value="last-month">Last month</option>
+            <option value="last-3">Last 3 months</option>
+            <option value="this-year" selected>This year</option>
+            <option value="all">All time</option>
+          </select>
+        </div>
+        <div class="cards">
+          <div class="card"><span>Money in</span><b id="k-income">GHS 0</b></div>
+          <div class="card"><span>Expenses</span><b id="k-expense">GHS 0</b></div>
+          <div class="card"><span>Profit</span><b id="k-profit">GHS 0</b></div>
+          <div class="card"><span>Profit margin</span><b id="k-margin">0%</b></div>
+        </div>
+        <div class="panel">
+          <h3>Money in vs expenses by month</h3>
+          <div class="chart-box"><canvas id="chart-monthly"></canvas></div>
+        </div>
+        <div class="grid2">
+          <div class="panel">
+            <h3>Where the money goes</h3>
+            <div class="chart-box"><canvas id="chart-categories"></canvas></div>
+          </div>
+          <div class="panel">
+            <h3>Profit by shipment</h3>
+            <div id="shipment-profit-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Records -->
+      <div id="tab-records" class="tab" hidden>
+        <div class="row between wrap">
+          <h2>Records</h2>
+          <button class="btn small" id="export-csv">Download as Excel (CSV)</button>
+        </div>
+        <div class="filters">
+          <input type="search" id="f-search" placeholder="Search description, client…">
+          <select id="f-type">
+            <option value="">All types</option>
+            <option value="income">Money in</option>
+            <option value="expense">Expenses</option>
+          </select>
+          <select id="f-category"><option value="">All categories</option></select>
+          <select id="f-shipment"><option value="">All shipments</option></select>
+          <input type="month" id="f-month" title="Month">
+        </div>
+        <p class="muted" id="records-summary"></p>
+        <div id="records-list" class="list"></div>
+      </div>
+
+      <!-- Shipments -->
+      <div id="tab-shipments" class="tab" hidden>
+        <div class="row between wrap">
+          <h2>Shipments</h2>
+          <button class="btn primary small" id="add-shipment">+ New shipment</button>
+        </div>
+        <p class="muted">Group costs and sales by container or order to see what each shipment really earned.</p>
+        <div id="shipments-list" class="list"></div>
+      </div>
+
+      <!-- Settings -->
+      <div id="tab-settings" class="tab" hidden>
+        <h2>Settings</h2>
+        <div class="panel">
+          <h3>Exchange rates</h3>
+          <p class="muted">Used to fill in the rate when you record a USD or RMB amount. You can still change the rate on each record.</p>
+          <form id="rates-form" class="inline-form">
+            <label>1 USD = GHS <input type="number" step="0.0001" min="0" id="rate-usd"></label>
+            <label>1 RMB = GHS <input type="number" step="0.0001" min="0" id="rate-rmb"></label>
+            <button class="btn primary small" type="submit">Save rates</button>
+          </form>
+        </div>
+        <div class="panel">
+          <h3>Where your data is stored</h3>
+          <p id="storage-info" class="muted"></p>
+          <details>
+            <summary>Connect online storage (Supabase)</summary>
+            <form id="cloud-form" class="stack">
+              <label>Project URL <input type="url" id="cloud-url" placeholder="https://xxxx.supabase.co"></label>
+              <label>anon public key <input type="text" id="cloud-key" placeholder="eyJhbGciOi…"></label>
+              <div class="row gap">
+                <button class="btn primary small" type="submit">Save &amp; connect</button>
+                <button class="btn small" type="button" id="cloud-clear">Use this device only</button>
+              </div>
+            </form>
+          </details>
+          <div id="import-local-box" hidden>
+            <p>You have <b id="local-count">0</b> records saved on this device from before you connected online storage.</p>
+            <button class="btn small" id="import-local">Copy them to online storage</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>Backup</h3>
+          <div class="row gap wrap">
+            <button class="btn small" id="backup-download">Download full backup</button>
+            <label class="btn small file-btn">Restore from backup<input type="file" id="backup-restore" accept=".json" hidden></label>
+          </div>
+        </div>
+        <div class="panel" id="account-panel" hidden>
+          <h3>Account</h3>
+          <p class="muted">Signed in as <b id="account-email"></b></p>
+          <button class="btn small" id="sign-out">Sign out</button>
+        </div>
+      </div>
+    </main>
+
+    <nav class="tabbar">
+      <button data-tab="dashboard" class="active">📊<span>Overview</span></button>
+      <button data-tab="records">📒<span>Records</span></button>
+      <button data-tab="shipments">🚢<span>Shipments</span></button>
+      <button data-tab="settings">⚙️<span>Settings</span></button>
+    </nav>
+  </section>
+
+  <!-- Record form -->
+  <dialog id="record-dialog">
+    <form id="record-form" method="dialog" class="stack">
+      <h3 id="record-title">Add record</h3>
+      <div class="seg">
+        <label><input type="radio" name="type" value="expense" checked> Expense</label>
+        <label><input type="radio" name="type" value="income"> Money in</label>
+      </div>
+      <label>Date <input type="date" name="date" required></label>
+      <label>Category <select name="category" required></select></label>
+      <label>Description <input type="text" name="description" placeholder="e.g. 200 cartons of cups, Yiwu supplier"></label>
+      <div class="row gap">
+        <label class="grow">Amount <input type="number" name="amount" step="0.01" min="0" required></label>
+        <label>Currency
+          <select name="currency">
+            <option>GHS</option><option>USD</option><option>RMB</option>
+          </select>
+        </label>
+      </div>
+      <label id="rate-row" hidden>Rate (GHS per 1 unit) <input type="number" name="rate" step="0.0001" min="0"></label>
+      <p class="muted" id="ghs-preview"></p>
+      <label>Shipment <select name="shipment_id"><option value="">— None —</option></select></label>
+      <label>Client / customer <input type="text" name="client" list="client-list" placeholder="e.g. Philip, Hellen Korley"></label>
+      <datalist id="client-list"></datalist>
+      <p id="record-msg" class="msg"></p>
+      <div class="row between">
+        <button type="button" class="btn danger small" id="record-delete" hidden>Delete</button>
+        <div class="row gap">
+          <button type="button" class="btn small" data-close>Cancel</button>
+          <button type="submit" class="btn primary small">Save</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Shipment form -->
+  <dialog id="shipment-dialog">
+    <form id="shipment-form" method="dialog" class="stack">
+      <h3 id="shipment-title">New shipment</h3>
+      <label>Name / reference <input type="text" name="name" required placeholder="e.g. Container Oct 2026"></label>
+      <label>Supplier (China) <input type="text" name="supplier"></label>
+      <label>Shipping agent / forwarder <input type="text" name="forwarder" placeholder="e.g. Easy Station Logistics"></label>
+      <div class="row gap">
+        <label class="grow">Order date <input type="date" name="order_date"></label>
+        <label class="grow">Arrival date <input type="date" name="arrival_date"></label>
+      </div>
+      <label>Status
+        <select name="status">
+          <option>Ordered</option><option>Shipped</option><option>At port</option>
+          <option>Cleared</option><option>Selling</option><option>Sold out</option>
+        </select>
+      </label>
+      <label>Notes <textarea name="notes" rows="2"></textarea></label>
+      <p id="shipment-msg" class="msg"></p>
+      <div class="row between">
+        <button type="button" class="btn danger small" id="shipment-delete" hidden>Delete</button>
+        <div class="row gap">
+          <button type="button" class="btn small" data-close>Cancel</button>
+          <button type="submit" class="btn primary small">Save</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

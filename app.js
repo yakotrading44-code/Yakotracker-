@@ -1,0 +1,729 @@
+// Yako Trading profit & expense tracker
+// Plain JavaScript, no build step. Data lives either in Supabase (online)
+// or in this browser's localStorage (device only).
+
+const CATEGORIES = {
+  expense: [
+    "Goods purchase (supplier)",
+    "Freight / shipping",
+    "Customs duty & clearing",
+    "Port & handling charges",
+    "Local transport / delivery",
+    "Warehouse / storage",
+    "Agent commission",
+    "Bank & transfer fees",
+    "Salaries & wages",
+    "Rent & utilities",
+    "Marketing",
+    "Other expense",
+  ],
+  income: [
+    "Product sales",
+    "Shipping charged to clients",
+    "Other income",
+  ],
+};
+
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => [...document.querySelectorAll(sel)];
+
+const state = {
+  transactions: [],
+  shipments: [],
+  user: null,
+  charts: {},
+};
+
+// ---------- formatting ----------
+
+const fmt = new Intl.NumberFormat("en-GH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const money = (n, cur = "GHS") => `${cur} ${fmt.format(Number(n) || 0)}`;
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const today = () => new Date().toISOString().slice(0, 10);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const fmtDate = (d) => (d ? new Date(d + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "");
+
+function toast(text) {
+  const el = $("#toast");
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => (el.hidden = true), 2500);
+}
+
+// ---------- settings (per device) ----------
+
+const Settings = {
+  get(key, fallback) {
+    try {
+      const v = localStorage.getItem("yako_setting_" + key);
+      return v === null ? fallback : JSON.parse(v);
+    } catch {
+      return fallback;
+    }
+  },
+  set(key, value) {
+    try { localStorage.setItem("yako_setting_" + key, JSON.stringify(value)); } catch {}
+  },
+};
+
+function cloudConfig() {
+  const saved = Settings.get("cloud", null);
+  if (saved && saved.url && saved.key) return saved;
+  const c = window.YAKO_CONFIG || {};
+  if (c.supabaseUrl && c.supabaseAnonKey) return { url: c.supabaseUrl, key: c.supabaseAnonKey };
+  return null;
+}
+
+function rates() {
+  return Settings.get("rates", { USD: 15, RMB: 2.1 });
+}
+
+// ---------- storage ----------
+
+const LocalStore = {
+  mode: "local",
+  read(table) {
+    try { return JSON.parse(localStorage.getItem("yako_" + table) || "[]"); } catch { return []; }
+  },
+  write(table, rows) {
+    localStorage.setItem("yako_" + table, JSON.stringify(rows));
+  },
+  async list(table) {
+    return this.read(table);
+  },
+  async insert(table, row) {
+    const rows = this.read(table);
+    const rec = { ...row, id: crypto.randomUUID(), created_at: new Date().toISOString() };
+    rows.push(rec);
+    this.write(table, rows);
+    return rec;
+  },
+  async update(table, id, patch) {
+    const rows = this.read(table);
+    const i = rows.findIndex((r) => r.id === id);
+    if (i < 0) throw new Error("Record not found");
+    rows[i] = { ...rows[i], ...patch };
+    this.write(table, rows);
+    return rows[i];
+  },
+  async remove(table, id) {
+    this.write(table, this.read(table).filter((r) => r.id !== id));
+    if (table === "shipments") {
+      // mirror the database rule: unlink records from a deleted shipment
+      this.write("transactions", this.read("transactions").map((t) => (t.shipment_id === id ? { ...t, shipment_id: null } : t)));
+    }
+  },
+};
+
+function makeCloudStore(client) {
+  const check = ({ data, error }) => {
+    if (error) throw new Error(error.message);
+    return data;
+  };
+  return {
+    mode: "cloud",
+    client,
+    async list(table) {
+      const all = [];
+      // page through in case there are more than 1000 rows
+      for (let from = 0; ; from += 1000) {
+        const rows = check(await client.from(table).select("*").order("created_at").range(from, from + 999));
+        all.push(...rows);
+        if (rows.length < 1000) break;
+      }
+      return all;
+    },
+    async insert(table, row) {
+      return check(await client.from(table).insert(row).select().single());
+    },
+    async update(table, id, patch) {
+      return check(await client.from(table).update(patch).eq("id", id).select().single());
+    },
+    async remove(table, id) {
+      check(await client.from(table).delete().eq("id", id));
+    },
+  };
+}
+
+let Store = LocalStore;
+
+// ---------- startup & auth ----------
+
+async function start() {
+  const cfg = cloudConfig();
+  if (cfg && window.supabase) {
+    let client;
+    try {
+      client = window.supabase.createClient(cfg.url, cfg.key);
+    } catch (e) {
+      alert("Online storage details look wrong: " + e.message + "\nUsing this device only for now.");
+      return openApp();
+    }
+    Store = makeCloudStore(client);
+    const { data } = await client.auth.getSession();
+    client.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") location.reload();
+      state.user = session?.user || null;
+    });
+    if (data.session) {
+      state.user = data.session.user;
+      return openApp();
+    }
+    return showAuth(client);
+  }
+  if (cfg && !window.supabase) toast("Could not reach online storage. Showing data saved on this device.");
+  openApp();
+}
+
+function showAuth(client) {
+  $("#auth-screen").hidden = false;
+  $("#app-screen").hidden = true;
+  let signup = false;
+  const msg = $("#auth-msg");
+  $("#auth-toggle").onclick = () => {
+    signup = !signup;
+    $("#auth-submit").textContent = signup ? "Create account" : "Sign in";
+    $("#auth-toggle").textContent = signup ? "Already have an account? Sign in" : "New here? Create an account";
+    msg.textContent = "";
+  };
+  $("#auth-form").onsubmit = async (e) => {
+    e.preventDefault();
+    msg.className = "msg";
+    msg.textContent = "Please wait…";
+    const email = $("#auth-email").value.trim();
+    const password = $("#auth-password").value;
+    const res = signup
+      ? await client.auth.signUp({ email, password })
+      : await client.auth.signInWithPassword({ email, password });
+    if (res.error) {
+      msg.textContent = res.error.message;
+      return;
+    }
+    if (signup && !res.data.session) {
+      msg.className = "msg ok";
+      msg.textContent = "Account created. Check your email and click the confirmation link, then sign in here.";
+      return;
+    }
+    state.user = res.data.user;
+    $("#auth-screen").hidden = true;
+    openApp();
+  };
+}
+
+async function openApp() {
+  $("#app-screen").hidden = false;
+  $("#storage-badge").textContent = Store.mode === "cloud" ? "Online" : "This device only";
+  try {
+    await reload();
+  } catch (e) {
+    alert("Could not load your records: " + e.message + "\n\nIf you just set up Supabase, make sure you ran the database setup (schema.sql).");
+  }
+  renderSettings();
+}
+
+async function reload() {
+  const [transactions, shipments] = await Promise.all([Store.list("transactions"), Store.list("shipments")]);
+  state.transactions = transactions.map((t) => ({ ...t, amount: Number(t.amount), rate: Number(t.rate), amount_ghs: Number(t.amount_ghs) }));
+  state.shipments = shipments;
+  renderAll();
+}
+
+// ---------- tabs ----------
+
+function showTab(name) {
+  $$(".tab").forEach((t) => (t.hidden = t.id !== "tab-" + name));
+  $$(".tabbar button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+  if (name === "dashboard") renderDashboard();
+  window.scrollTo(0, 0);
+}
+$$(".tabbar button").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
+
+function renderAll() {
+  fillFilterOptions();
+  renderDashboard();
+  renderRecords();
+  renderShipments();
+}
+
+// ---------- calculations ----------
+
+function periodRange(key) {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const first = (yy, mm) => new Date(Date.UTC(yy, mm, 1));
+  switch (key) {
+    case "this-month": return [iso(first(y, m)), iso(first(y, m + 1))];
+    case "last-month": return [iso(first(y, m - 1)), iso(first(y, m))];
+    case "last-3": return [iso(first(y, m - 2)), iso(first(y, m + 1))];
+    case "this-year": return [iso(first(y, 0)), iso(first(y + 1, 0))];
+    default: return [null, null];
+  }
+}
+
+function totals(list) {
+  let income = 0, expense = 0;
+  for (const t of list) {
+    if (t.type === "income") income += t.amount_ghs;
+    else expense += t.amount_ghs;
+  }
+  return { income: round2(income), expense: round2(expense), profit: round2(income - expense) };
+}
+
+// ---------- dashboard ----------
+
+function renderDashboard() {
+  if ($("#tab-dashboard").hidden) return;
+  const [from, to] = periodRange($("#period").value);
+  const list = state.transactions.filter((t) => (!from || t.date >= from) && (!to || t.date < to));
+  const k = totals(list);
+  $("#k-income").textContent = money(k.income);
+  $("#k-expense").textContent = money(k.expense);
+  const p = $("#k-profit");
+  p.textContent = money(k.profit);
+  p.className = k.profit >= 0 ? "pos" : "neg";
+  $("#k-margin").textContent = k.income ? Math.round((k.profit / k.income) * 100) + "%" : "—";
+
+  if (!window.Chart) return renderShipmentProfit();
+  const css = getComputedStyle(document.documentElement);
+  const cIncome = css.getPropertyValue("--income").trim();
+  const cExpense = css.getPropertyValue("--expense").trim();
+  const cText = css.getPropertyValue("--muted").trim();
+  Chart.defaults.color = cText;
+
+  // monthly bars
+  const byMonth = {};
+  for (const t of list) {
+    const key = t.date.slice(0, 7);
+    byMonth[key] ??= { income: 0, expense: 0 };
+    byMonth[key][t.type] += t.amount_ghs;
+  }
+  const months = Object.keys(byMonth).sort().slice(-12);
+  const labels = months.map((m) => new Date(m + "-01T00:00:00").toLocaleDateString("en-GB", { month: "short", year: "2-digit" }));
+  state.charts.monthly?.destroy();
+  state.charts.monthly = new Chart($("#chart-monthly"), {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        { label: "Money in", data: months.map((m) => round2(byMonth[m].income)), backgroundColor: cIncome, borderRadius: 4 },
+        { label: "Expenses", data: months.map((m) => round2(byMonth[m].expense)), backgroundColor: cExpense, borderRadius: 4 },
+      ],
+    },
+    options: {
+      maintainAspectRatio: false,
+      plugins: { tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${money(c.raw)}` } } },
+      scales: { y: { beginAtZero: true, ticks: { callback: (v) => fmt.format(v).replace(/\.00$/, "") } } },
+    },
+  });
+
+  // expense categories
+  const byCat = {};
+  for (const t of list) if (t.type === "expense") byCat[t.category] = (byCat[t.category] || 0) + t.amount_ghs;
+  const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+  const palette = ["#0f5132", "#d4a017", "#2b6cb0", "#c0392b", "#7b4fa3", "#1a9c9c", "#e67e22", "#5f6b65", "#8e44ad", "#16a085", "#a0522d", "#34495e"];
+  state.charts.categories?.destroy();
+  state.charts.categories = new Chart($("#chart-categories"), {
+    type: "doughnut",
+    data: { labels: cats.map((c) => c[0]), datasets: [{ data: cats.map((c) => round2(c[1])), backgroundColor: palette, borderWidth: 0 }] },
+    options: {
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: innerWidth < 600 ? "bottom" : "right", labels: { boxWidth: 12, font: { size: 11 } } },
+        tooltip: { callbacks: { label: (c) => `${c.label}: ${money(c.raw)}` } },
+      },
+    },
+  });
+
+  renderShipmentProfit();
+}
+
+function shipmentTotals(id) {
+  return totals(state.transactions.filter((t) => t.shipment_id === id));
+}
+
+function renderShipmentProfit() {
+  const box = $("#shipment-profit-list");
+  if (!state.shipments.length) {
+    box.innerHTML = `<p class="muted">No shipments yet. Add one in the Shipments tab, then link costs and sales to it.</p>`;
+    return;
+  }
+  const rows = state.shipments
+    .map((s) => ({ s, t: shipmentTotals(s.id) }))
+    .sort((a, b) => (b.s.order_date || b.s.created_at || "").localeCompare(a.s.order_date || a.s.created_at || ""))
+    .slice(0, 8);
+  box.innerHTML = rows
+    .map(({ s, t }) => `<div class="mini-row"><span>${esc(s.name)}</span><b class="${t.profit >= 0 ? "pos" : "neg"}">${money(t.profit)}</b></div>`)
+    .join("");
+}
+
+$("#period").onchange = renderDashboard;
+
+// ---------- records ----------
+
+function fillFilterOptions() {
+  const catSel = $("#f-category");
+  const keep = catSel.value;
+  catSel.innerHTML = `<option value="">All categories</option>` +
+    [...CATEGORIES.expense, ...CATEGORIES.income].map((c) => `<option>${esc(c)}</option>`).join("");
+  catSel.value = keep;
+
+  const shipOpts = state.shipments.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
+  const fs = $("#f-shipment");
+  const keepS = fs.value;
+  fs.innerHTML = `<option value="">All shipments</option><option value="none">Not linked to a shipment</option>` + shipOpts;
+  fs.value = keepS;
+
+  const clients = [...new Set(state.transactions.map((t) => t.client).filter(Boolean))].sort();
+  $("#client-list").innerHTML = clients.map((c) => `<option value="${esc(c)}">`).join("");
+}
+
+function filteredRecords() {
+  const q = $("#f-search").value.trim().toLowerCase();
+  const type = $("#f-type").value;
+  const cat = $("#f-category").value;
+  const ship = $("#f-shipment").value;
+  const month = $("#f-month").value;
+  return state.transactions
+    .filter((t) =>
+      (!type || t.type === type) &&
+      (!cat || t.category === cat) &&
+      (!ship || (ship === "none" ? !t.shipment_id : t.shipment_id === ship)) &&
+      (!month || t.date.startsWith(month)) &&
+      (!q || [t.description, t.client, t.category].some((v) => (v || "").toLowerCase().includes(q))))
+    .sort((a, b) => b.date.localeCompare(a.date) || (b.created_at || "").localeCompare(a.created_at || ""));
+}
+
+function renderRecords() {
+  const list = filteredRecords();
+  const k = totals(list);
+  $("#records-summary").innerHTML = `${list.length} record${list.length === 1 ? "" : "s"} · In <b class="pos">${money(k.income)}</b> · Out <b class="neg">${money(k.expense)}</b> · Profit <b class="${k.profit >= 0 ? "pos" : "neg"}">${money(k.profit)}</b>`;
+  const shipName = Object.fromEntries(state.shipments.map((s) => [s.id, s.name]));
+  const box = $("#records-list");
+  if (!state.transactions.length) {
+    box.innerHTML = `<div class="empty">No records yet.<br>Tap <b>+ Add record</b> to log your first expense or sale.</div>`;
+    return;
+  }
+  box.innerHTML = list.map((t) => {
+    const sign = t.type === "income" ? "+" : "−";
+    const foreign = t.currency !== "GHS" ? `<small>${money(t.amount, t.currency)} @ ${t.rate}</small>` : "";
+    const sub = [fmtDate(t.date), t.category, t.client, shipName[t.shipment_id]].filter(Boolean).map(esc).join(" · ");
+    return `<button class="item" data-id="${t.id}">
+      <div class="main"><div class="title">${esc(t.description || t.category)}</div><div class="sub">${sub}</div></div>
+      <div class="amt ${t.type === "income" ? "pos" : "neg"}">${sign}${money(t.amount_ghs)}${foreign}</div>
+    </button>`;
+  }).join("") || `<div class="empty">No records match these filters.</div>`;
+  box.querySelectorAll(".item").forEach((el) => (el.onclick = () => openRecord(state.transactions.find((t) => t.id === el.dataset.id))));
+}
+
+["#f-search", "#f-type", "#f-category", "#f-shipment", "#f-month"].forEach((s) => ($(s).oninput = renderRecords));
+
+$("#export-csv").onclick = () => {
+  const shipName = Object.fromEntries(state.shipments.map((s) => [s.id, s.name]));
+  const head = ["Date", "Type", "Category", "Description", "Client", "Shipment", "Amount", "Currency", "Rate", "Amount (GHS)"];
+  const rows = filteredRecords().map((t) => [
+    t.date, t.type === "income" ? "Money in" : "Expense", t.category, t.description, t.client,
+    shipName[t.shipment_id] || "", t.amount, t.currency, t.rate, t.amount_ghs,
+  ]);
+  const csv = [head, ...rows].map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  download(`yako-records-${today()}.csv`, "﻿" + csv, "text/csv");
+};
+
+function download(name, text, type) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------- record dialog ----------
+
+const recDialog = $("#record-dialog");
+const recForm = $("#record-form");
+let editingRecord = null;
+
+function setCategoryOptions(type, selected) {
+  const sel = recForm.category;
+  sel.innerHTML = CATEGORIES[type].map((c) => `<option>${esc(c)}</option>`).join("");
+  if (selected && !CATEGORIES[type].includes(selected)) sel.insertAdjacentHTML("beforeend", `<option>${esc(selected)}</option>`);
+  if (selected) sel.value = selected;
+}
+
+function updateRatePreview() {
+  const cur = recForm.currency.value;
+  $("#rate-row").hidden = cur === "GHS";
+  const amount = Number(recForm.amount.value) || 0;
+  const rate = cur === "GHS" ? 1 : Number(recForm.rate.value) || 0;
+  $("#ghs-preview").textContent = cur === "GHS" || !amount ? "" : `= ${money(amount * rate)}`;
+}
+
+function openRecord(rec, defaults = {}) {
+  editingRecord = rec || null;
+  recForm.reset();
+  $("#record-msg").textContent = "";
+  $("#record-title").textContent = rec ? "Edit record" : "Add record";
+  $("#record-delete").hidden = !rec;
+  const r = rec || { type: "expense", date: today(), currency: "GHS", ...defaults };
+  recForm.querySelector(`input[name=type][value=${r.type}]`).checked = true;
+  setCategoryOptions(r.type, r.category);
+  recForm.date.value = r.date;
+  recForm.description.value = r.description || "";
+  recForm.amount.value = r.amount ?? "";
+  recForm.currency.value = r.currency || "GHS";
+  recForm.rate.value = r.currency && r.currency !== "GHS" ? r.rate : "";
+  recForm.client.value = r.client || "";
+  recForm.shipment_id.innerHTML = `<option value="">— None —</option>` +
+    state.shipments.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
+  recForm.shipment_id.value = r.shipment_id || "";
+  updateRatePreview();
+  recDialog.showModal();
+}
+
+recForm.querySelectorAll("input[name=type]").forEach((el) => (el.onchange = () => setCategoryOptions(el.value)));
+recForm.currency.onchange = () => {
+  const cur = recForm.currency.value;
+  if (cur !== "GHS") recForm.rate.value = rates()[cur] || "";
+  updateRatePreview();
+};
+recForm.amount.oninput = updateRatePreview;
+recForm.rate.oninput = updateRatePreview;
+
+recForm.onsubmit = async (e) => {
+  e.preventDefault();
+  const f = recForm;
+  const currency = f.currency.value;
+  const amount = round2(f.amount.value);
+  const rate = currency === "GHS" ? 1 : Number(f.rate.value);
+  if (currency !== "GHS" && !(rate > 0)) {
+    $("#record-msg").textContent = "Please enter the exchange rate.";
+    return;
+  }
+  const row = {
+    type: f.querySelector("input[name=type]:checked").value,
+    date: f.date.value,
+    category: f.category.value,
+    description: f.description.value.trim() || null,
+    client: f.client.value.trim() || null,
+    amount,
+    currency,
+    rate,
+    amount_ghs: round2(amount * rate),
+    shipment_id: f.shipment_id.value || null,
+  };
+  try {
+    if (editingRecord) await Store.update("transactions", editingRecord.id, row);
+    else await Store.insert("transactions", row);
+    recDialog.close();
+    toast("Saved");
+    await reload();
+  } catch (err) {
+    $("#record-msg").textContent = "Could not save: " + err.message;
+  }
+};
+
+$("#record-delete").onclick = async () => {
+  if (!editingRecord || !confirm("Delete this record?")) return;
+  try {
+    await Store.remove("transactions", editingRecord.id);
+    recDialog.close();
+    toast("Deleted");
+    await reload();
+  } catch (err) {
+    $("#record-msg").textContent = "Could not delete: " + err.message;
+  }
+};
+
+$("#add-record-top").onclick = () => openRecord(null);
+$$("[data-close]").forEach((b) => (b.onclick = () => b.closest("dialog").close()));
+
+// ---------- shipments ----------
+
+function renderShipments() {
+  const box = $("#shipments-list");
+  if (!state.shipments.length) {
+    box.innerHTML = `<div class="empty">No shipments yet.<br>Create one for each container or order from China.</div>`;
+    return;
+  }
+  const sorted = [...state.shipments].sort((a, b) => (b.order_date || b.created_at || "").localeCompare(a.order_date || a.created_at || ""));
+  box.innerHTML = sorted.map((s) => {
+    const t = shipmentTotals(s.id);
+    const margin = t.income ? Math.round((t.profit / t.income) * 100) + "%" : "—";
+    const sub = [s.supplier, s.forwarder, s.order_date && "Ordered " + fmtDate(s.order_date), s.arrival_date && "Arrived " + fmtDate(s.arrival_date)].filter(Boolean).map(esc).join(" · ");
+    return `<div class="item" data-id="${s.id}">
+      <div class="main">
+        <div class="title">${esc(s.name)}<span class="pill">${esc(s.status)}</span></div>
+        <div class="sub">${sub}</div>
+        <div class="ship-stats">
+          <span>Cost <b>${money(t.expense)}</b></span>
+          <span>Sales <b>${money(t.income)}</b></span>
+          <span>Margin <b>${margin}</b></span>
+        </div>
+      </div>
+      <div class="amt ${t.profit >= 0 ? "pos" : "neg"}">${money(t.profit)}<small>profit</small>
+        <button class="btn small" data-add="${s.id}" style="margin-top:.4rem">+ Record</button>
+      </div>
+    </div>`;
+  }).join("");
+  box.querySelectorAll(".item").forEach((el) => (el.onclick = (e) => {
+    const addId = e.target.dataset?.add;
+    if (addId) return openRecord(null, { shipment_id: addId });
+    openShipment(state.shipments.find((s) => s.id === el.dataset.id));
+  }));
+}
+
+const shipDialog = $("#shipment-dialog");
+const shipForm = $("#shipment-form");
+let editingShipment = null;
+
+function openShipment(s) {
+  editingShipment = s || null;
+  shipForm.reset();
+  $("#shipment-msg").textContent = "";
+  $("#shipment-title").textContent = s ? "Edit shipment" : "New shipment";
+  $("#shipment-delete").hidden = !s;
+  if (s) for (const k of ["name", "supplier", "forwarder", "order_date", "arrival_date", "status", "notes"]) shipForm[k].value = s[k] || (k === "status" ? "Ordered" : "");
+  else shipForm.order_date.value = today();
+  shipDialog.showModal();
+}
+
+$("#add-shipment").onclick = () => openShipment(null);
+
+shipForm.onsubmit = async (e) => {
+  e.preventDefault();
+  const f = shipForm;
+  const row = {
+    name: f.name.value.trim(),
+    supplier: f.supplier.value.trim() || null,
+    forwarder: f.forwarder.value.trim() || null,
+    order_date: f.order_date.value || null,
+    arrival_date: f.arrival_date.value || null,
+    status: f.status.value,
+    notes: f.notes.value.trim() || null,
+  };
+  try {
+    if (editingShipment) await Store.update("shipments", editingShipment.id, row);
+    else await Store.insert("shipments", row);
+    shipDialog.close();
+    toast("Shipment saved");
+    await reload();
+  } catch (err) {
+    $("#shipment-msg").textContent = "Could not save: " + err.message;
+  }
+};
+
+$("#shipment-delete").onclick = async () => {
+  if (!editingShipment) return;
+  if (!confirm("Delete this shipment? Its records are kept but will no longer be linked to it.")) return;
+  try {
+    await Store.remove("shipments", editingShipment.id);
+    shipDialog.close();
+    toast("Shipment deleted");
+    await reload();
+  } catch (err) {
+    $("#shipment-msg").textContent = "Could not delete: " + err.message;
+  }
+};
+
+// ---------- settings ----------
+
+function renderSettings() {
+  const r = rates();
+  $("#rate-usd").value = r.USD;
+  $("#rate-rmb").value = r.RMB;
+  const cfg = cloudConfig();
+  $("#storage-info").textContent = Store.mode === "cloud"
+    ? `Your records are saved online in Supabase (${new URL(cfg.url).host}). Sign in on any phone or computer to see them.`
+    : "Your records are saved only in this browser on this device. Connect online storage below to keep them safe and use them on other devices.";
+  const saved = Settings.get("cloud", null);
+  $("#cloud-url").value = saved?.url || "";
+  $("#cloud-key").value = saved?.key || "";
+  $("#account-panel").hidden = !state.user;
+  $("#account-email").textContent = state.user?.email || "";
+
+  const localCount = LocalStore.read("transactions").length + LocalStore.read("shipments").length;
+  $("#import-local-box").hidden = !(Store.mode === "cloud" && localCount);
+  $("#local-count").textContent = localCount;
+}
+
+$("#rates-form").onsubmit = (e) => {
+  e.preventDefault();
+  Settings.set("rates", { USD: Number($("#rate-usd").value) || 0, RMB: Number($("#rate-rmb").value) || 0 });
+  toast("Rates saved");
+};
+
+$("#cloud-form").onsubmit = (e) => {
+  e.preventDefault();
+  const url = $("#cloud-url").value.trim().replace(/\/+$/, "");
+  const key = $("#cloud-key").value.trim();
+  if (!url || !key) return toast("Enter both the URL and the key");
+  Settings.set("cloud", { url, key });
+  location.reload();
+};
+
+$("#cloud-clear").onclick = () => {
+  if (!confirm("Switch to keeping data on this device only? Your online records stay safe in Supabase.")) return;
+  Settings.set("cloud", null);
+  if (window.YAKO_CONFIG?.supabaseUrl) Settings.set("forceLocal", true);
+  location.reload();
+};
+
+$("#import-local").onclick = async () => {
+  if (!confirm("Copy the records saved on this device into online storage?")) return;
+  try {
+    await importData({ shipments: LocalStore.read("shipments"), transactions: LocalStore.read("transactions") });
+    LocalStore.write("shipments", []);
+    LocalStore.write("transactions", []);
+    toast("Copied to online storage");
+    await reload();
+    renderSettings();
+  } catch (err) {
+    alert("Copy failed: " + err.message);
+  }
+};
+
+// Insert shipments + transactions, keeping the links between them.
+async function importData({ shipments = [], transactions = [] }) {
+  const idMap = {};
+  for (const s of shipments) {
+    const { id, user_id, created_at, ...rest } = s;
+    const rec = await Store.insert("shipments", rest);
+    idMap[id] = rec.id;
+  }
+  for (const t of transactions) {
+    const { id, user_id, created_at, ...rest } = t;
+    rest.shipment_id = rest.shipment_id ? idMap[rest.shipment_id] || null : null;
+    await Store.insert("transactions", rest);
+  }
+}
+
+$("#backup-download").onclick = () => {
+  const data = { app: "yako-tracker", exported_at: new Date().toISOString(), shipments: state.shipments, transactions: state.transactions };
+  download(`yako-backup-${today()}.json`, JSON.stringify(data, null, 2), "application/json");
+};
+
+$("#backup-restore").onchange = async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (data.app !== "yako-tracker") throw new Error("This is not a Yako tracker backup file.");
+    if (!confirm(`Add ${data.transactions.length} records and ${data.shipments.length} shipments from this backup? (Existing records are kept.)`)) return;
+    await importData(data);
+    toast("Backup restored");
+    await reload();
+  } catch (err) {
+    alert("Restore failed: " + err.message);
+  }
+};
+
+$("#sign-out").onclick = () => Store.client?.auth.signOut();
+
+// config.js values are ignored when the user chose "this device only"
+if (Settings.get("forceLocal", false) && !Settings.get("cloud", null)) window.YAKO_CONFIG = {};
+if (Settings.get("cloud", null)) Settings.set("forceLocal", false);
+
+start();
