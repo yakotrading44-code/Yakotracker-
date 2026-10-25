@@ -124,7 +124,7 @@ function makeSheetStore(url, passcode) {
         method: "POST",
         // text/plain avoids a CORS preflight, which Apps Script can't answer
         headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ action, passcode, ...payload }),
+        body: JSON.stringify({ action, passcode, adminPassword: Admin.password(), ...payload }),
       });
     } catch {
       throw new Error("Could not reach your Google Sheet. Check your internet connection.");
@@ -160,10 +160,74 @@ function makeSheetStore(url, passcode) {
     async remove(table, id) {
       await call("remove", { table, id });
     },
+    async checkAdmin(password) {
+      await call("checkAdmin", { adminPassword: password });
+    },
   };
 }
 
 let Store = LocalStore;
+
+// ---------- administrator password ----------
+// Viewing is open to anyone with the passcode; changing or deleting records
+// needs the administrator password, which the Google Sheet script checks.
+// Once entered it is remembered until the browser tab is closed.
+
+const Admin = {
+  password() {
+    try { return sessionStorage.getItem("yako_admin") || ""; } catch { return ""; }
+  },
+  set(pw) {
+    try { pw ? sessionStorage.setItem("yako_admin", pw) : sessionStorage.removeItem("yako_admin"); } catch {}
+    renderAdminState();
+  },
+  unlocked() {
+    return Store.mode !== "cloud" || !!this.password();
+  },
+  // Resolves true when editing is allowed, asking for the password if needed.
+  require() {
+    if (this.unlocked()) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const dlg = $("#admin-dialog");
+      const form = $("#admin-form");
+      const msg = $("#admin-msg");
+      form.reset();
+      msg.textContent = "";
+      let done = false;
+      const finish = (ok) => {
+        if (done) return;
+        done = true;
+        dlg.close();
+        resolve(ok);
+      };
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        const pw = $("#admin-password").value;
+        msg.className = "msg";
+        msg.textContent = "Checking…";
+        try {
+          await Store.checkAdmin(pw);
+          this.set(pw);
+          finish(true);
+        } catch (err) {
+          msg.textContent = err.code === "admin" ? "That administrator password is not right." : err.message;
+        }
+      };
+      $("#admin-cancel").onclick = () => finish(false);
+      dlg.onclose = () => finish(false);
+      dlg.showModal();
+    });
+  },
+};
+
+function renderAdminState() {
+  const cloud = Store.mode === "cloud";
+  $("#admin-panel").hidden = !cloud;
+  $("#admin-status").textContent = Admin.password()
+    ? "Editing is unlocked on this device until you close the app or lock it."
+    : "Editing is locked. Anyone can view records, but changing or deleting them needs the administrator password.";
+  $("#admin-lock").hidden = !Admin.password();
+}
 
 // ---------- startup ----------
 
@@ -196,6 +260,7 @@ function showPasscode(message = "") {
 }
 
 async function openApp() {
+  renderAdminState();
   $("#app-screen").hidden = false;
   $("#storage-badge").textContent = Store.mode === "cloud" ? "Google Sheet" : "This device only";
   try {
@@ -452,11 +517,7 @@ function renderRecords() {
         <td class="num ${k.profit >= 0 ? "pos" : "neg"}">${fmt.format(k.profit)}</td>
         <td class="num">${k.income ? Math.round((k.profit / k.income) * 100) + "%" : "—"}</td></tr>`
     : "";
-  body.querySelectorAll("tr[data-i]").forEach((tr) => (tr.onclick = () => {
-    const g = rows[tr.dataset.i];
-    if (isSale(g)) openSale(g);
-    else openRecord(g.records[0]);
-  }));
+  body.querySelectorAll("tr[data-i]").forEach((tr) => (tr.onclick = () => openView(rows[tr.dataset.i])));
 }
 
 ["#f-search", "#f-type", "#f-category", "#f-shipment", "#f-month"].forEach((s) => ($(s).oninput = () => {
@@ -634,6 +695,7 @@ recForm.onsubmit = async (e) => {
     toast("Saved");
     await reload();
   } catch (err) {
+    if (err.code === "admin") Admin.set("");
     $("#record-msg").textContent = "Could not save: " + err.message;
   }
 };
@@ -647,11 +709,50 @@ $("#record-delete").onclick = async () => {
     toast("Deleted");
     await reload();
   } catch (err) {
+    if (err.code === "admin") Admin.set("");
     $("#record-msg").textContent = "Could not delete: " + err.message;
   }
 };
 
 $("#add-record-top").onclick = () => openRecord(null);
+
+// ---------- record details (read only) ----------
+
+function openView(g) {
+  const shipName = Object.fromEntries(state.shipments.map((s) => [s.id, s.name]));
+  const expense = g.records.find((r) => r.type === "expense");
+  const income = g.records.find((r) => r.type === "income");
+  const cost = expense && expense.currency !== "GHS"
+    ? `${money(g.cost)} <small class="muted">(${esc(money(expense.amount, expense.currency))} @ ${esc(expense.rate)})</small>`
+    : g.cost ? money(g.cost) : "—";
+  const lines = [
+    ["Date", fmtDate(g.date)],
+    ["Item", g.description || g.records[0].category],
+    ["Customer", g.client],
+    ["Shipment", shipName[g.shipment_id]],
+    ["Type", isSale(g) ? "Sale" : g.records.map((r) => (r.type === "income" ? "Money in" : "Expense") + " · " + r.category).join(", ")],
+  ].filter(([, v]) => v).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("");
+  const nums = `
+    <dt>Cost</dt><dd class="neg">${cost}</dd>
+    <dt>Paid</dt><dd class="pos">${g.paid ? money(g.paid) : "—"}</dd>
+    <dt>Profit</dt><dd class="${g.profit >= 0 ? "pos" : "neg"}"><b>${money(g.profit)}</b></dd>
+    <dt>Margin</dt><dd>${marginText(g)}</dd>`;
+  $("#view-body").innerHTML = `<dl class="details">${lines}${nums}</dl>`;
+  $("#view-title").textContent = isSale(g) ? "Sale details" : "Record details";
+  $("#view-edit").textContent = Admin.unlocked() ? "Edit" : "🔒 Edit";
+  $("#view-edit").onclick = async () => {
+    $("#view-dialog").close();
+    if (!(await Admin.require())) return;
+    if (isSale(g)) openSale(g);
+    else openRecord(g.records[0]);
+  };
+  $("#view-dialog").showModal();
+}
+
+$("#admin-lock").onclick = () => {
+  Admin.set("");
+  toast("Editing locked");
+};
 $$("[data-close]").forEach((b) => (b.onclick = () => b.closest("dialog").close()));
 
 // ---------- shipments ----------
@@ -685,7 +786,8 @@ function renderShipments() {
   box.querySelectorAll(".item").forEach((el) => (el.onclick = (e) => {
     const addId = e.target.dataset?.add;
     if (addId) return openRecord(null, { shipment_id: addId });
-    openShipment(state.shipments.find((s) => s.id === el.dataset.id));
+    const s = state.shipments.find((x) => x.id === el.dataset.id);
+    Admin.require().then((ok) => ok && openShipment(s));
   }));
 }
 
@@ -725,6 +827,7 @@ shipForm.onsubmit = async (e) => {
     toast("Shipment saved");
     await reload();
   } catch (err) {
+    if (err.code === "admin") Admin.set("");
     $("#shipment-msg").textContent = "Could not save: " + err.message;
   }
 };
@@ -738,6 +841,7 @@ $("#shipment-delete").onclick = async () => {
     toast("Shipment deleted");
     await reload();
   } catch (err) {
+    if (err.code === "admin") Admin.set("");
     $("#shipment-msg").textContent = "Could not delete: " + err.message;
   }
 };

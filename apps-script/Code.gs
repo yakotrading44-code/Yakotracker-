@@ -4,7 +4,8 @@
  * Setup (once):
  * 1. Create a new Google Sheet (e.g. "Yako Trading Records").
  * 2. In the sheet: Extensions > Apps Script. Delete what is there and paste this whole file.
- * 3. Change PASSCODE below to your own secret word, then click Save.
+ * 3. Change PASSCODE (to open the app) and ADMIN_PASSWORD (to edit or delete records)
+ *    below to your own secret words, then click Save.
  * 4. Deploy > New deployment > type "Web app".
  *    Execute as: Me.  Who has access: Anyone.  Click Deploy and allow access.
  * 5. Copy the "Web app URL" (ends in /exec) into the tracker app.
@@ -14,6 +15,7 @@
  */
 
 const PASSCODE = 'change-me';
+const ADMIN_PASSWORD = 'change-me-admin';
 
 const TABLES = {
   transactions: {
@@ -65,7 +67,15 @@ function doPost(e) {
     if (PASSCODE === 'change-me') throw new Error('Set your own PASSCODE in the Apps Script code, then deploy again.');
     if (req.passcode !== PASSCODE) return json({ ok: false, code: 'auth', error: 'Wrong passcode' });
 
+    // Changing or deleting existing records needs the administrator password.
+    if (req.action === 'checkAdmin' || req.action === 'update' || req.action === 'remove') {
+      if (ADMIN_PASSWORD === 'change-me-admin') throw new Error('Set your own ADMIN_PASSWORD in the Apps Script code, then deploy a new version.');
+      if (req.adminPassword !== ADMIN_PASSWORD) return json({ ok: false, code: 'admin', error: 'Wrong administrator password' });
+    }
+
     switch (req.action) {
+      case 'checkAdmin':
+        return json({ ok: true });
       case 'list':
         return json({ ok: true, transactions: readAll('transactions'), shipments: readAll('shipments') });
       case 'insert':

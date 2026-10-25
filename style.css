@@ -208,3 +208,10 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 .pager-size { display: flex; align-items: center; gap: .4rem; white-space: nowrap; }
 .pager-size select { width: auto; margin: 0; padding: .35rem .5rem; }
 .pager .btn:disabled { opacity: .45; cursor: default; }
+
+/* Record details */
+.details { display: grid; grid-template-columns: auto 1fr; gap: .45rem 1rem; margin: 0; }
+.details dt { color: var(--muted); font-size: .85rem; }
+.details dd { margin: 0; font-variant-numeric: tabular-nums; }
+.details dd small { display: block; }
+.details dt:nth-of-type(n+1) { align-self: baseline; }

@@ -6,8 +6,8 @@
   <meta http-equiv="Cache-Control" content="no-cache">
   <meta name="theme-color" content="#0f5132">
   <title>Yako Trading Tracker</title>
-  <link rel="stylesheet" href="style.css?v=202610250642">
-  <script src="config.js?v=202610250642"></script>
+  <link rel="stylesheet" href="style.css?v=202610250648">
+  <script src="config.js?v=202610250648"></script>
   <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -88,7 +88,7 @@
           <input type="month" id="f-month" title="Month">
         </div>
         <div class="cards" id="records-summary"></div>
-        <p class="muted small-note">Each sale shows its cost and what the customer paid on one row. Tap a row to edit it.</p>
+        <p class="muted small-note">Each sale shows its cost and what the customer paid on one row. Tap a row to see its details.</p>
         <div class="table-wrap">
           <table class="rec-table">
             <thead>
@@ -163,6 +163,11 @@
             <label class="btn small file-btn">Restore from backup<input type="file" id="backup-restore" accept=".json" hidden></label>
           </div>
         </div>
+        <div class="panel" id="admin-panel" hidden>
+          <h3>Editing</h3>
+          <p class="muted" id="admin-status"></p>
+          <button class="btn small" id="admin-lock" hidden>Lock editing</button>
+        </div>
         <div class="panel" id="account-panel" hidden>
           <h3>Passcode</h3>
           <p class="muted">Lock the app on this device. You'll need the passcode to open it again.</p>
@@ -217,6 +222,32 @@
     </form>
   </dialog>
 
+  <!-- Record details (read only) -->
+  <dialog id="view-dialog">
+    <div class="stack">
+      <h3 id="view-title">Record details</h3>
+      <div id="view-body"></div>
+      <div class="row between">
+        <button type="button" class="btn small" id="view-edit">🔒 Edit</button>
+        <button type="button" class="btn primary small" data-close>Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Administrator password -->
+  <dialog id="admin-dialog">
+    <form id="admin-form" class="stack">
+      <h3>Administrator password</h3>
+      <p class="muted">Enter the administrator password to change or delete records.</p>
+      <label>Password <input type="password" id="admin-password" required autocomplete="off"></label>
+      <p id="admin-msg" class="msg"></p>
+      <div class="row gap" style="justify-content:flex-end">
+        <button type="button" class="btn small" id="admin-cancel">Cancel</button>
+        <button type="submit" class="btn primary small">Unlock</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- Shipment form -->
   <dialog id="shipment-dialog">
     <form id="shipment-form" method="dialog" class="stack">
@@ -247,6 +278,6 @@
   </dialog>
 
   <div id="toast" class="toast" hidden></div>
-  <script src="app.js?v=202610250642"></script>
+  <script src="app.js?v=202610250648"></script>
 </body>
 </html>

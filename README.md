@@ -20,7 +20,7 @@ Works on phones and computers. No build step: it is plain HTML, CSS and JavaScri
 1. Go to https://sheets.google.com and create a blank spreadsheet. Name it `Yako Trading Records`.
 2. In the sheet, click **Extensions → Apps Script**.
 3. Delete the code that is there, and paste everything from [`apps-script/Code.gs`](apps-script/Code.gs).
-4. On the line `const PASSCODE = 'change-me';` replace `change-me` with your own secret word (keep the quotes). Click the **Save** icon.
+4. On the line `const PASSCODE = 'change-me';` replace `change-me` with your own secret word (keep the quotes). This opens the app. On the line `const ADMIN_PASSWORD = 'change-me-admin';` put a different secret word: this is needed to edit or delete records. Click the **Save** icon.
 5. Click **Deploy → New deployment**. Click the gear next to "Select type" and choose **Web app**. Set **Execute as: Me** and **Who has access: Anyone**. Click **Deploy**.
 6. Google asks you to authorize: click **Authorize access**, choose your account, then **Advanced → Go to (project name) → Allow**. (Google shows this warning for any script you write yourself.)
 7. Copy the **Web app URL** (it ends in `/exec`). Put it in [`config.js`](config.js), or paste it in the app under **Settings → Connect Google Sheet**.
