@@ -100,6 +100,18 @@
             <tfoot id="records-foot"></tfoot>
           </table>
         </div>
+        <div class="pager">
+          <label class="pager-size">Rows per page
+            <select id="page-size">
+              <option value="10">10</option><option value="20">20</option><option value="50">50</option><option value="0">All</option>
+            </select>
+          </label>
+          <span id="page-info" class="muted"></span>
+          <div class="row gap">
+            <button class="btn small" id="page-prev">‹ Previous</button>
+            <button class="btn small" id="page-next">Next ›</button>
+          </div>
+        </div>
       </div>
 
       <!-- Shipments -->

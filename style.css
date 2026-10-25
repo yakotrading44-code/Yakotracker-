@@ -203,3 +203,8 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 .rec-table td.col-item small { display: block; color: var(--muted); font-size: .75rem; }
 .rec-table tfoot td { font-weight: 700; border-bottom: 0; border-top: 2px solid var(--border); }
 .rec-table .dash { color: var(--muted); }
+
+.pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem .75rem; }
+.pager-size { display: flex; align-items: center; gap: .4rem; white-space: nowrap; }
+.pager-size select { width: auto; margin: 0; padding: .35rem .5rem; }
+.pager .btn:disabled { opacity: .45; cursor: default; }

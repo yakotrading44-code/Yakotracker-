@@ -404,8 +404,20 @@ function groupRecords(list) {
 const isSale = (g) => g.records.length === 2 && g.records.some((r) => r.type === "income") && g.records.some((r) => r.type === "expense");
 const marginText = (g) => (g.paid && g.cost ? Math.round((g.profit / g.paid) * 100) + "%" : "—");
 
+let recordsPage = 1;
+
 function renderRecords() {
-  const rows = groupRecords(filteredRecords());
+  const allRows = groupRecords(filteredRecords());
+  const size = Number($("#page-size").value) || allRows.length || 1;
+  const pages = Math.max(1, Math.ceil(allRows.length / size));
+  recordsPage = Math.min(Math.max(1, recordsPage), pages);
+  const start = (recordsPage - 1) * size;
+  const rows = allRows.slice(start, start + size);
+  $("#page-info").textContent = allRows.length
+    ? `Showing ${start + 1}–${start + rows.length} of ${allRows.length}${pages > 1 ? ` · Page ${recordsPage} of ${pages}` : ""}`
+    : "";
+  $("#page-prev").disabled = recordsPage <= 1;
+  $("#page-next").disabled = recordsPage >= pages;
   const k = totals(filteredRecords());
   $("#records-summary").innerHTML = `
     <div class="card"><span>Cost</span><b class="neg">${money(k.expense)}</b></div>
@@ -435,7 +447,7 @@ function renderRecords() {
     </tr>`;
   }).join("") || `<tr><td colspan="7" class="empty">No records match these filters.</td></tr>`;
   $("#records-foot").innerHTML = rows.length
-    ? `<tr><td colspan="3">Total (${rows.length} row${rows.length === 1 ? "" : "s"})</td>
+    ? `<tr><td colspan="3">Total (all ${allRows.length} row${allRows.length === 1 ? "" : "s"})</td>
         <td class="num">${fmt.format(k.expense)}</td><td class="num">${fmt.format(k.income)}</td>
         <td class="num ${k.profit >= 0 ? "pos" : "neg"}">${fmt.format(k.profit)}</td>
         <td class="num">${k.income ? Math.round((k.profit / k.income) * 100) + "%" : "—"}</td></tr>`
@@ -447,7 +459,24 @@ function renderRecords() {
   }));
 }
 
-["#f-search", "#f-type", "#f-category", "#f-shipment", "#f-month"].forEach((s) => ($(s).oninput = renderRecords));
+["#f-search", "#f-type", "#f-category", "#f-shipment", "#f-month"].forEach((s) => ($(s).oninput = () => {
+  recordsPage = 1;
+  renderRecords();
+}));
+
+$("#page-size").value = String(Settings.get("pageSize", 10));
+$("#page-size").onchange = () => {
+  Settings.set("pageSize", Number($("#page-size").value));
+  recordsPage = 1;
+  renderRecords();
+};
+const goToPage = (delta) => {
+  recordsPage += delta;
+  renderRecords();
+  $(".table-wrap").scrollIntoView({ block: "start", behavior: "smooth" });
+};
+$("#page-prev").onclick = () => goToPage(-1);
+$("#page-next").onclick = () => goToPage(1);
 
 $("#export-csv").onclick = () => {
   const shipName = Object.fromEntries(state.shipments.map((s) => [s.id, s.name]));
