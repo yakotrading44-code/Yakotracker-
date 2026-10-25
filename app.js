@@ -384,36 +384,77 @@ function filteredRecords() {
     .sort((a, b) => b.date.localeCompare(a.date) || (b.created_at || "").localeCompare(a.created_at || ""));
 }
 
+// A sale is saved as two records (cost + amount paid) with the same date,
+// description, customer and shipment. The table shows them on one row.
+function groupRecords(list) {
+  const groups = new Map();
+  for (const t of list) {
+    const key = t.description
+      ? [t.date, t.description.trim().toLowerCase(), (t.client || "").trim().toLowerCase(), t.shipment_id || ""].join("|")
+      : "single|" + t.id;
+    let g = groups.get(key);
+    if (!g) groups.set(key, (g = { date: t.date, description: t.description, client: t.client, shipment_id: t.shipment_id, cost: 0, paid: 0, records: [] }));
+    g.records.push(t);
+    if (t.type === "income") g.paid += t.amount_ghs;
+    else g.cost += t.amount_ghs;
+  }
+  return [...groups.values()].map((g) => ({ ...g, cost: round2(g.cost), paid: round2(g.paid), profit: round2(g.paid - g.cost) }));
+}
+
+const isSale = (g) => g.records.length === 2 && g.records.some((r) => r.type === "income") && g.records.some((r) => r.type === "expense");
+const marginText = (g) => (g.paid && g.cost ? Math.round((g.profit / g.paid) * 100) + "%" : "—");
+
 function renderRecords() {
-  const list = filteredRecords();
-  const k = totals(list);
-  $("#records-summary").innerHTML = `${list.length} record${list.length === 1 ? "" : "s"} · In <b class="pos">${money(k.income)}</b> · Out <b class="neg">${money(k.expense)}</b> · Profit <b class="${k.profit >= 0 ? "pos" : "neg"}">${money(k.profit)}</b>`;
+  const rows = groupRecords(filteredRecords());
+  const k = totals(filteredRecords());
+  $("#records-summary").innerHTML = `
+    <div class="card"><span>Cost</span><b class="neg">${money(k.expense)}</b></div>
+    <div class="card"><span>Paid</span><b class="pos">${money(k.income)}</b></div>
+    <div class="card"><span>Profit</span><b class="${k.profit >= 0 ? "pos" : "neg"}">${money(k.profit)}</b></div>
+    <div class="card"><span>Margin</span><b>${k.income ? Math.round((k.profit / k.income) * 100) + "%" : "—"}</b></div>`;
   const shipName = Object.fromEntries(state.shipments.map((s) => [s.id, s.name]));
-  const box = $("#records-list");
+  const body = $("#records-body");
   if (!state.transactions.length) {
-    box.innerHTML = `<div class="empty">No records yet.<br>Tap <b>+ Add record</b> to log your first expense or sale.</div>`;
+    body.innerHTML = `<tr><td colspan="7" class="empty">No records yet. Tap <b>+ Add record</b> to log your first sale or expense.</td></tr>`;
+    $("#records-foot").innerHTML = "";
     return;
   }
-  box.innerHTML = list.map((t) => {
-    const sign = t.type === "income" ? "+" : "−";
-    const foreign = t.currency !== "GHS" ? `<small>${money(t.amount, t.currency)} @ ${t.rate}</small>` : "";
-    const sub = [fmtDate(t.date), t.category, t.client, shipName[t.shipment_id]].filter(Boolean).map(esc).join(" · ");
-    return `<button class="item" data-id="${t.id}">
-      <div class="main"><div class="title">${esc(t.description || t.category)}</div><div class="sub">${sub}</div></div>
-      <div class="amt ${t.type === "income" ? "pos" : "neg"}">${sign}${money(t.amount_ghs)}${foreign}</div>
-    </button>`;
-  }).join("") || `<div class="empty">No records match these filters.</div>`;
-  box.querySelectorAll(".item").forEach((el) => (el.onclick = () => openRecord(state.transactions.find((t) => t.id === el.dataset.id))));
+  const amt = (v) => (v ? fmt.format(v) : `<span class="dash">—</span>`);
+  body.innerHTML = rows.map((g, i) => {
+    const first = g.records[0];
+    const label = isSale(g) || g.records.length > 1 || !g.description ? "" : first.category;
+    const sub = [label, shipName[g.shipment_id]].filter(Boolean).map(esc).join(" · ");
+    return `<tr data-i="${i}">
+      <td class="date">${esc(fmtDate(g.date))}</td>
+      <td class="col-item">${esc(g.description || first.category)}${sub ? `<small>${sub}</small>` : ""}</td>
+      <td>${esc(g.client || "")}</td>
+      <td class="num">${amt(g.cost)}</td>
+      <td class="num">${amt(g.paid)}</td>
+      <td class="num ${g.profit >= 0 ? "pos" : "neg"}">${fmt.format(g.profit)}</td>
+      <td class="num">${marginText(g)}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="7" class="empty">No records match these filters.</td></tr>`;
+  $("#records-foot").innerHTML = rows.length
+    ? `<tr><td colspan="3">Total (${rows.length} row${rows.length === 1 ? "" : "s"})</td>
+        <td class="num">${fmt.format(k.expense)}</td><td class="num">${fmt.format(k.income)}</td>
+        <td class="num ${k.profit >= 0 ? "pos" : "neg"}">${fmt.format(k.profit)}</td>
+        <td class="num">${k.income ? Math.round((k.profit / k.income) * 100) + "%" : "—"}</td></tr>`
+    : "";
+  body.querySelectorAll("tr[data-i]").forEach((tr) => (tr.onclick = () => {
+    const g = rows[tr.dataset.i];
+    if (isSale(g)) openSale(g);
+    else openRecord(g.records[0]);
+  }));
 }
 
 ["#f-search", "#f-type", "#f-category", "#f-shipment", "#f-month"].forEach((s) => ($(s).oninput = renderRecords));
 
 $("#export-csv").onclick = () => {
   const shipName = Object.fromEntries(state.shipments.map((s) => [s.id, s.name]));
-  const head = ["Date", "Type", "Category", "Description", "Client", "Shipment", "Amount", "Currency", "Rate", "Amount (GHS)"];
-  const rows = filteredRecords().map((t) => [
-    t.date, t.type === "income" ? "Money in" : "Expense", t.category, t.description, t.client,
-    shipName[t.shipment_id] || "", t.amount, t.currency, t.rate, t.amount_ghs,
+  const head = ["Date", "Item", "Customer", "Shipment", "Category", "Cost (GHS)", "Paid (GHS)", "Profit (GHS)", "Margin"];
+  const rows = groupRecords(filteredRecords()).map((g) => [
+    g.date, g.description || g.records[0].category, g.client, shipName[g.shipment_id] || "",
+    isSale(g) ? "Sale" : g.records.map((r) => r.category).join(" / "), g.cost, g.paid, g.profit, marginText(g),
   ]);
   const csv = [head, ...rows].map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
   download(`yako-records-${today()}.csv`, "﻿" + csv, "text/csv");
@@ -432,12 +473,29 @@ function download(name, text, type) {
 const recDialog = $("#record-dialog");
 const recForm = $("#record-form");
 let editingRecord = null;
+let editingSale = null; // { income, expense } when editing a sale
 
 function setCategoryOptions(type, selected) {
   const sel = recForm.category;
+  if (type === "sale") return;
   sel.innerHTML = CATEGORIES[type].map((c) => `<option>${esc(c)}</option>`).join("");
   if (selected && !CATEGORIES[type].includes(selected)) sel.insertAdjacentHTML("beforeend", `<option>${esc(selected)}</option>`);
   if (selected) sel.value = selected;
+}
+
+const formType = () => recForm.querySelector("input[name=type]:checked").value;
+
+function setType(type, category) {
+  recForm.querySelector(`input[name=type][value=${type}]`).checked = true;
+  const sale = type === "sale";
+  $("#category-row").hidden = sale;
+  $("#paid-row").hidden = !sale;
+  $("#profit-preview").hidden = !sale;
+  $("#amount-label").textContent = sale ? "Cost of the item(s)" : "Amount";
+  recForm.description.required = sale;
+  recForm.description.placeholder = sale ? "e.g. P-0034 · Smart Watch ×2" : "e.g. Freight for October container";
+  setCategoryOptions(type, category);
+  updateRatePreview();
 }
 
 function updateRatePreview() {
@@ -446,31 +504,54 @@ function updateRatePreview() {
   const amount = Number(recForm.amount.value) || 0;
   const rate = cur === "GHS" ? 1 : Number(recForm.rate.value) || 0;
   $("#ghs-preview").textContent = cur === "GHS" || !amount ? "" : `= ${money(amount * rate)}`;
+  if (formType() === "sale") {
+    const cost = amount * rate;
+    const paid = Number(recForm.paid.value) || 0;
+    const profit = paid - cost;
+    $("#profit-preview").innerHTML = paid || cost
+      ? `Profit: <b class="${profit >= 0 ? "pos" : "neg"}">${money(profit)}</b>${paid ? ` (${Math.round((profit / paid) * 100)}% margin)` : ""}`
+      : "";
+  }
+}
+
+function fillShipments(selected) {
+  recForm.shipment_id.innerHTML = `<option value="">— None —</option>` +
+    state.shipments.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
+  recForm.shipment_id.value = selected || "";
 }
 
 function openRecord(rec, defaults = {}) {
   editingRecord = rec || null;
+  editingSale = null;
   recForm.reset();
   $("#record-msg").textContent = "";
   $("#record-title").textContent = rec ? "Edit record" : "Add record";
   $("#record-delete").hidden = !rec;
-  const r = rec || { type: "expense", date: today(), currency: "GHS", ...defaults };
-  recForm.querySelector(`input[name=type][value=${r.type}]`).checked = true;
-  setCategoryOptions(r.type, r.category);
+  const r = rec || { type: "sale", date: today(), currency: "GHS", ...defaults };
   recForm.date.value = r.date;
   recForm.description.value = r.description || "";
   recForm.amount.value = r.amount ?? "";
   recForm.currency.value = r.currency || "GHS";
   recForm.rate.value = r.currency && r.currency !== "GHS" ? r.rate : "";
   recForm.client.value = r.client || "";
-  recForm.shipment_id.innerHTML = `<option value="">— None —</option>` +
-    state.shipments.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
-  recForm.shipment_id.value = r.shipment_id || "";
-  updateRatePreview();
+  fillShipments(r.shipment_id);
+  setType(r.type, r.category);
   recDialog.showModal();
 }
 
-recForm.querySelectorAll("input[name=type]").forEach((el) => (el.onchange = () => setCategoryOptions(el.value)));
+function openSale(g) {
+  const income = g.records.find((r) => r.type === "income");
+  const expense = g.records.find((r) => r.type === "expense");
+  openRecord(expense);
+  editingRecord = null;
+  editingSale = { income, expense };
+  $("#record-title").textContent = "Edit sale";
+  setType("sale");
+  recForm.paid.value = income.amount_ghs;
+  updateRatePreview();
+}
+
+recForm.querySelectorAll("input[name=type]").forEach((el) => (el.onchange = () => setType(el.value)));
 recForm.currency.onchange = () => {
   const cur = recForm.currency.value;
   if (cur !== "GHS") recForm.rate.value = rates()[cur] || "";
@@ -478,10 +559,12 @@ recForm.currency.onchange = () => {
 };
 recForm.amount.oninput = updateRatePreview;
 recForm.rate.oninput = updateRatePreview;
+recForm.paid.oninput = updateRatePreview;
 
 recForm.onsubmit = async (e) => {
   e.preventDefault();
   const f = recForm;
+  const type = formType();
   const currency = f.currency.value;
   const amount = round2(f.amount.value);
   const rate = currency === "GHS" ? 1 : Number(f.rate.value);
@@ -489,21 +572,35 @@ recForm.onsubmit = async (e) => {
     $("#record-msg").textContent = "Please enter the exchange rate.";
     return;
   }
-  const row = {
-    type: f.querySelector("input[name=type]:checked").value,
+  const shared = {
     date: f.date.value,
-    category: f.category.value,
     description: f.description.value.trim() || null,
     client: f.client.value.trim() || null,
-    amount,
-    currency,
-    rate,
-    amount_ghs: round2(amount * rate),
     shipment_id: f.shipment_id.value || null,
   };
+  const costRow = { ...shared, amount, currency, rate, amount_ghs: round2(amount * rate) };
   try {
-    if (editingRecord) await Store.update("transactions", editingRecord.id, row);
-    else await Store.insert("transactions", row);
+    if (type === "sale") {
+      const paid = round2(f.paid.value);
+      const expenseRow = { ...costRow, type: "expense", category: editingSale?.expense.category || "Goods purchase (supplier)" };
+      const incomeRow = { ...shared, type: "income", category: editingSale?.income.category || "Product sales", amount: paid, currency: "GHS", rate: 1, amount_ghs: paid };
+      if (editingSale) {
+        await Store.update("transactions", editingSale.expense.id, expenseRow);
+        await Store.update("transactions", editingSale.income.id, incomeRow);
+      } else {
+        if (editingRecord) await Store.remove("transactions", editingRecord.id); // record turned into a sale
+        await Store.insert("transactions", expenseRow);
+        await Store.insert("transactions", incomeRow);
+      }
+    } else {
+      const row = { ...costRow, type, category: f.category.value };
+      if (editingSale) {
+        // sale turned into a single record
+        await Store.update("transactions", editingSale.expense.id, row);
+        await Store.remove("transactions", editingSale.income.id);
+      } else if (editingRecord) await Store.update("transactions", editingRecord.id, row);
+      else await Store.insert("transactions", row);
+    }
     recDialog.close();
     toast("Saved");
     await reload();
@@ -513,9 +610,10 @@ recForm.onsubmit = async (e) => {
 };
 
 $("#record-delete").onclick = async () => {
-  if (!editingRecord || !confirm("Delete this record?")) return;
+  const ids = editingSale ? [editingSale.expense.id, editingSale.income.id] : editingRecord ? [editingRecord.id] : [];
+  if (!ids.length || !confirm(editingSale ? "Delete this sale (its cost and payment)?" : "Delete this record?")) return;
   try {
-    await Store.remove("transactions", editingRecord.id);
+    for (const id of ids) await Store.remove("transactions", id);
     recDialog.close();
     toast("Deleted");
     await reload();

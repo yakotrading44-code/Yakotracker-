@@ -73,10 +73,10 @@
       <div id="tab-records" class="tab" hidden>
         <div class="row between wrap">
           <h2>Records</h2>
-          <button class="btn small" id="export-csv">Download as Excel (CSV)</button>
+          <button class="btn small" id="export-csv">Download table (Excel)</button>
         </div>
         <div class="filters">
-          <input type="search" id="f-search" placeholder="Search description, client…">
+          <input type="search" id="f-search" placeholder="Search item, order no., customer…">
           <select id="f-type">
             <option value="">All types</option>
             <option value="income">Money in</option>
@@ -86,8 +86,20 @@
           <select id="f-shipment"><option value="">All shipments</option></select>
           <input type="month" id="f-month" title="Month">
         </div>
-        <p class="muted" id="records-summary"></p>
-        <div id="records-list" class="list"></div>
+        <div class="cards" id="records-summary"></div>
+        <p class="muted small-note">Each sale shows its cost and what the customer paid on one row. Tap a row to edit it.</p>
+        <div class="table-wrap">
+          <table class="rec-table">
+            <thead>
+              <tr>
+                <th>Date</th><th>Item</th><th>Customer</th>
+                <th class="num">Cost (GH₵)</th><th class="num">Paid (GH₵)</th><th class="num">Profit (GH₵)</th><th class="num">Margin</th>
+              </tr>
+            </thead>
+            <tbody id="records-body"></tbody>
+            <tfoot id="records-foot"></tfoot>
+          </table>
+        </div>
       </div>
 
       <!-- Shipments -->
@@ -159,14 +171,15 @@
     <form id="record-form" method="dialog" class="stack">
       <h3 id="record-title">Add record</h3>
       <div class="seg">
-        <label><input type="radio" name="type" value="expense" checked> Expense</label>
+        <label><input type="radio" name="type" value="sale" checked> Sale</label>
+        <label><input type="radio" name="type" value="expense"> Expense</label>
         <label><input type="radio" name="type" value="income"> Money in</label>
       </div>
       <label>Date <input type="date" name="date" required></label>
-      <label>Category <select name="category" required></select></label>
+      <label id="category-row">Category <select name="category"></select></label>
       <label>Description <input type="text" name="description" placeholder="e.g. 200 cartons of cups, Yiwu supplier"></label>
       <div class="row gap">
-        <label class="grow">Amount <input type="number" name="amount" step="0.01" min="0" required></label>
+        <label class="grow"><span id="amount-label">Amount</span> <input type="number" name="amount" step="0.01" min="0" required></label>
         <label>Currency
           <select name="currency">
             <option>GHS</option><option>USD</option><option>RMB</option>
@@ -175,6 +188,8 @@
       </div>
       <label id="rate-row" hidden>Rate (GHS per 1 unit) <input type="number" name="rate" step="0.0001" min="0"></label>
       <p class="muted" id="ghs-preview"></p>
+      <label id="paid-row" hidden>Amount paid by customer (GH₵) <input type="number" name="paid" step="0.01" min="0"></label>
+      <p id="profit-preview" class="muted" hidden></p>
       <label>Shipment <select name="shipment_id"><option value="">— None —</option></select></label>
       <label>Client / customer <input type="text" name="client" list="client-list" placeholder="e.g. Philip, Hellen Korley"></label>
       <datalist id="client-list"></datalist>
