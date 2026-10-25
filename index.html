@@ -7,20 +7,18 @@
   <title>Yako Trading Tracker</title>
   <link rel="stylesheet" href="style.css">
   <script src="config.js"></script>
-  <script src="vendor/supabase.js"></script>
   <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
-  <!-- Sign in (only used when online storage is set up) -->
+  <!-- Passcode (only used when a Google Sheet is connected) -->
   <section id="auth-screen" class="screen" hidden>
     <div class="auth-card">
       <h1>Yako Trading</h1>
       <p class="muted">Profit &amp; expense tracker</p>
       <form id="auth-form">
-        <label>Email <input type="email" id="auth-email" required autocomplete="email"></label>
-        <label>Password <input type="password" id="auth-password" required minlength="6" autocomplete="current-password"></label>
-        <button type="submit" class="btn primary" id="auth-submit">Sign in</button>
-        <button type="button" class="btn link" id="auth-toggle">New here? Create an account</button>
+        <label>Passcode <input type="password" id="auth-passcode" required autocomplete="current-password"></label>
+        <button type="submit" class="btn primary">Open</button>
+        <button type="button" class="btn link" id="auth-local">Use this device only for now</button>
         <p id="auth-msg" class="msg"></p>
       </form>
     </div>
@@ -118,10 +116,10 @@
           <h3>Where your data is stored</h3>
           <p id="storage-info" class="muted"></p>
           <details>
-            <summary>Connect online storage (Supabase)</summary>
+            <summary>Connect Google Sheet</summary>
             <form id="cloud-form" class="stack">
-              <label>Project URL <input type="url" id="cloud-url" placeholder="https://xxxx.supabase.co"></label>
-              <label>anon public key <input type="text" id="cloud-key" placeholder="eyJhbGciOi…"></label>
+              <label>Web app URL <input type="url" id="cloud-url" placeholder="https://script.google.com/macros/s/…/exec"></label>
+              <label>Passcode <input type="password" id="cloud-key"></label>
               <div class="row gap">
                 <button class="btn primary small" type="submit">Save &amp; connect</button>
                 <button class="btn small" type="button" id="cloud-clear">Use this device only</button>
@@ -129,8 +127,8 @@
             </form>
           </details>
           <div id="import-local-box" hidden>
-            <p>You have <b id="local-count">0</b> records saved on this device from before you connected online storage.</p>
-            <button class="btn small" id="import-local">Copy them to online storage</button>
+            <p>You have <b id="local-count">0</b> records saved on this device from before you connected your Google Sheet.</p>
+            <button class="btn small" id="import-local">Copy them to the Google Sheet</button>
           </div>
         </div>
         <div class="panel">
@@ -141,9 +139,9 @@
           </div>
         </div>
         <div class="panel" id="account-panel" hidden>
-          <h3>Account</h3>
-          <p class="muted">Signed in as <b id="account-email"></b></p>
-          <button class="btn small" id="sign-out">Sign out</button>
+          <h3>Passcode</h3>
+          <p class="muted">Lock the app on this device. You'll need the passcode to open it again.</p>
+          <button class="btn small" id="sign-out">Lock app</button>
         </div>
       </div>
     </main>

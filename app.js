@@ -1,5 +1,5 @@
 // Yako Trading profit & expense tracker
-// Plain JavaScript, no build step. Data lives either in Supabase (online)
+// Plain JavaScript, no build step. Data lives either in a Google Sheet (online)
 // or in this browser's localStorage (device only).
 
 const CATEGORIES = {
@@ -69,10 +69,9 @@ const Settings = {
 
 function cloudConfig() {
   const saved = Settings.get("cloud", null);
-  if (saved && saved.url && saved.key) return saved;
-  const c = window.YAKO_CONFIG || {};
-  if (c.supabaseUrl && c.supabaseAnonKey) return { url: c.supabaseUrl, key: c.supabaseAnonKey };
-  return null;
+  if (saved && saved.url) return saved;
+  const url = (window.YAKO_CONFIG || {}).sheetUrl;
+  return url ? { url } : null;
 }
 
 function rates() {
@@ -89,8 +88,8 @@ const LocalStore = {
   write(table, rows) {
     localStorage.setItem("yako_" + table, JSON.stringify(rows));
   },
-  async list(table) {
-    return this.read(table);
+  async listAll() {
+    return { transactions: this.read("transactions"), shipments: this.read("shipments") };
   },
   async insert(table, row) {
     const rows = this.read(table);
@@ -116,115 +115,104 @@ const LocalStore = {
   },
 };
 
-function makeCloudStore(client) {
-  const check = ({ data, error }) => {
-    if (error) throw new Error(error.message);
+// Google Sheets via the Apps Script web app in apps-script/Code.gs
+function makeSheetStore(url, passcode) {
+  async function call(action, payload = {}) {
+    let res;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        // text/plain avoids a CORS preflight, which Apps Script can't answer
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action, passcode, ...payload }),
+      });
+    } catch {
+      throw new Error("Could not reach your Google Sheet. Check your internet connection.");
+    }
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      throw new Error("The Google Sheet link did not answer correctly. Check the Web app URL and that access is set to \"Anyone\".");
+    }
+    if (!data.ok) {
+      const err = new Error(data.error || "Unknown error");
+      err.code = data.code;
+      throw err;
+    }
     return data;
-  };
+  }
   return {
     mode: "cloud",
-    client,
-    async list(table) {
-      const all = [];
-      // page through in case there are more than 1000 rows
-      for (let from = 0; ; from += 1000) {
-        const rows = check(await client.from(table).select("*").order("created_at").range(from, from + 999));
-        all.push(...rows);
-        if (rows.length < 1000) break;
-      }
-      return all;
+    async listAll() {
+      const d = await call("list");
+      return { transactions: d.transactions, shipments: d.shipments };
     },
     async insert(table, row) {
-      return check(await client.from(table).insert(row).select().single());
+      return (await call("insert", { table, row })).rows[0];
     },
-    async update(table, id, patch) {
-      return check(await client.from(table).update(patch).eq("id", id).select().single());
+    async insertMany(table, rows) {
+      return (await call("insert", { table, rows })).rows;
+    },
+    async update(table, id, row) {
+      return (await call("update", { table, id, row })).row;
     },
     async remove(table, id) {
-      check(await client.from(table).delete().eq("id", id));
+      await call("remove", { table, id });
     },
   };
 }
 
 let Store = LocalStore;
 
-// ---------- startup & auth ----------
+// ---------- startup ----------
 
-async function start() {
+function start() {
   const cfg = cloudConfig();
-  if (cfg && window.supabase) {
-    let client;
-    try {
-      client = window.supabase.createClient(cfg.url, cfg.key);
-    } catch (e) {
-      alert("Online storage details look wrong: " + e.message + "\nUsing this device only for now.");
-      return openApp();
-    }
-    Store = makeCloudStore(client);
-    const { data } = await client.auth.getSession();
-    client.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_OUT") location.reload();
-      state.user = session?.user || null;
-    });
-    if (data.session) {
-      state.user = data.session.user;
-      return openApp();
-    }
-    return showAuth(client);
-  }
-  if (cfg && !window.supabase) toast("Could not reach online storage. Showing data saved on this device.");
+  if (!cfg) return openApp();
+  const passcode = Settings.get("passcode", "");
+  if (!passcode) return showPasscode();
+  Store = makeSheetStore(cfg.url, passcode);
   openApp();
 }
 
-function showAuth(client) {
-  $("#auth-screen").hidden = false;
+function showPasscode(message = "") {
   $("#app-screen").hidden = true;
-  let signup = false;
+  $("#auth-screen").hidden = false;
   const msg = $("#auth-msg");
-  $("#auth-toggle").onclick = () => {
-    signup = !signup;
-    $("#auth-submit").textContent = signup ? "Create account" : "Sign in";
-    $("#auth-toggle").textContent = signup ? "Already have an account? Sign in" : "New here? Create an account";
-    msg.textContent = "";
-  };
-  $("#auth-form").onsubmit = async (e) => {
+  msg.className = "msg";
+  msg.textContent = message;
+  $("#auth-form").onsubmit = (e) => {
     e.preventDefault();
-    msg.className = "msg";
-    msg.textContent = "Please wait…";
-    const email = $("#auth-email").value.trim();
-    const password = $("#auth-password").value;
-    const res = signup
-      ? await client.auth.signUp({ email, password })
-      : await client.auth.signInWithPassword({ email, password });
-    if (res.error) {
-      msg.textContent = res.error.message;
-      return;
-    }
-    if (signup && !res.data.session) {
-      msg.className = "msg ok";
-      msg.textContent = "Account created. Check your email and click the confirmation link, then sign in here.";
-      return;
-    }
-    state.user = res.data.user;
+    Settings.set("passcode", $("#auth-passcode").value.trim());
     $("#auth-screen").hidden = true;
+    start();
+  };
+  $("#auth-local").onclick = () => {
+    $("#auth-screen").hidden = true;
+    Store = LocalStore;
     openApp();
   };
 }
 
 async function openApp() {
   $("#app-screen").hidden = false;
-  $("#storage-badge").textContent = Store.mode === "cloud" ? "Online" : "This device only";
+  $("#storage-badge").textContent = Store.mode === "cloud" ? "Google Sheet" : "This device only";
   try {
     await reload();
   } catch (e) {
-    alert("Could not load your records: " + e.message + "\n\nIf you just set up Supabase, make sure you ran the database setup (schema.sql).");
+    if (e.code === "auth") {
+      Settings.set("passcode", "");
+      return showPasscode("That passcode is not right. Please try again.");
+    }
+    alert("Could not load your records: " + e.message);
   }
   renderSettings();
 }
 
 async function reload() {
-  const [transactions, shipments] = await Promise.all([Store.list("transactions"), Store.list("shipments")]);
-  state.transactions = transactions.map((t) => ({ ...t, amount: Number(t.amount), rate: Number(t.rate), amount_ghs: Number(t.amount_ghs) }));
+  const { transactions, shipments } = await Store.listAll();
+  state.transactions = transactions.map((t) => ({ ...t, amount: Number(t.amount), rate: Number(t.rate) || 1, amount_ghs: Number(t.amount_ghs), date: String(t.date || "") }));
   state.shipments = shipments;
   renderAll();
 }
@@ -635,13 +623,12 @@ function renderSettings() {
   $("#rate-rmb").value = r.RMB;
   const cfg = cloudConfig();
   $("#storage-info").textContent = Store.mode === "cloud"
-    ? `Your records are saved online in Supabase (${new URL(cfg.url).host}). Sign in on any phone or computer to see them.`
-    : "Your records are saved only in this browser on this device. Connect online storage below to keep them safe and use them on other devices.";
+    ? "Your records are saved in your Google Sheet. Open this app on any phone or computer with the same passcode to see them, or open the sheet itself in Google Drive."
+    : "Your records are saved only in this browser on this device. Connect a Google Sheet below to keep them safe and use them on other devices.";
   const saved = Settings.get("cloud", null);
-  $("#cloud-url").value = saved?.url || "";
-  $("#cloud-key").value = saved?.key || "";
-  $("#account-panel").hidden = !state.user;
-  $("#account-email").textContent = state.user?.email || "";
+  $("#cloud-url").value = saved?.url || cfg?.url || "";
+  $("#cloud-key").value = Settings.get("passcode", "");
+  $("#account-panel").hidden = Store.mode !== "cloud";
 
   const localCount = LocalStore.read("transactions").length + LocalStore.read("shipments").length;
   $("#import-local-box").hidden = !(Store.mode === "cloud" && localCount);
@@ -657,26 +644,27 @@ $("#rates-form").onsubmit = (e) => {
 $("#cloud-form").onsubmit = (e) => {
   e.preventDefault();
   const url = $("#cloud-url").value.trim().replace(/\/+$/, "");
-  const key = $("#cloud-key").value.trim();
-  if (!url || !key) return toast("Enter both the URL and the key");
-  Settings.set("cloud", { url, key });
+  const passcode = $("#cloud-key").value.trim();
+  if (!url || !passcode) return toast("Enter both the Web app URL and the passcode");
+  Settings.set("cloud", { url });
+  Settings.set("passcode", passcode);
   location.reload();
 };
 
 $("#cloud-clear").onclick = () => {
-  if (!confirm("Switch to keeping data on this device only? Your online records stay safe in Supabase.")) return;
+  if (!confirm("Switch to keeping data on this device only? Your records stay safe in the Google Sheet.")) return;
   Settings.set("cloud", null);
-  if (window.YAKO_CONFIG?.supabaseUrl) Settings.set("forceLocal", true);
+  if (window.YAKO_CONFIG?.sheetUrl) Settings.set("forceLocal", true);
   location.reload();
 };
 
 $("#import-local").onclick = async () => {
-  if (!confirm("Copy the records saved on this device into online storage?")) return;
+  if (!confirm("Copy the records saved on this device into the Google Sheet?")) return;
   try {
     await importData({ shipments: LocalStore.read("shipments"), transactions: LocalStore.read("transactions") });
     LocalStore.write("shipments", []);
     LocalStore.write("transactions", []);
-    toast("Copied to online storage");
+    toast("Copied to the Google Sheet");
     await reload();
     renderSettings();
   } catch (err) {
@@ -686,17 +674,18 @@ $("#import-local").onclick = async () => {
 
 // Insert shipments + transactions, keeping the links between them.
 async function importData({ shipments = [], transactions = [] }) {
+  const insertMany = Store.insertMany
+    ? (table, rows) => Store.insertMany(table, rows)
+    : (table, rows) => Promise.all(rows.map((r) => Store.insert(table, r)));
+  const strip = ({ id, user_id, created_at, shipment_name, ...rest }) => rest;
   const idMap = {};
-  for (const s of shipments) {
-    const { id, user_id, created_at, ...rest } = s;
-    const rec = await Store.insert("shipments", rest);
-    idMap[id] = rec.id;
-  }
-  for (const t of transactions) {
-    const { id, user_id, created_at, ...rest } = t;
+  const newShips = await insertMany("shipments", shipments.map(strip));
+  shipments.forEach((s, i) => (idMap[s.id] = newShips[i].id));
+  await insertMany("transactions", transactions.map((t) => {
+    const rest = strip(t);
     rest.shipment_id = rest.shipment_id ? idMap[rest.shipment_id] || null : null;
-    await Store.insert("transactions", rest);
-  }
+    return rest;
+  }));
 }
 
 $("#backup-download").onclick = () => {
@@ -720,7 +709,10 @@ $("#backup-restore").onchange = async (e) => {
   }
 };
 
-$("#sign-out").onclick = () => Store.client?.auth.signOut();
+$("#sign-out").onclick = () => {
+  Settings.set("passcode", "");
+  location.reload();
+};
 
 // config.js values are ignored when the user chose "this device only"
 if (Settings.get("forceLocal", false) && !Settings.get("cloud", null)) window.YAKO_CONFIG = {};

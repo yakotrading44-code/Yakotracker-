@@ -1,9 +1,6 @@
-// Supabase connection details.
-// Find them in Supabase > Project Settings > API (or "Connect" button).
-// The "anon public" key is safe to put here: the database only lets each
-// signed-in account read its own records.
-// Leave both empty to keep data only on this device (no online storage).
+// Link to your Google Sheet's Apps Script web app (see README, ends in /exec).
+// The passcode is NOT stored here: each device asks for it once.
+// Leave empty to keep data only on this device.
 window.YAKO_CONFIG = {
-  supabaseUrl: "",
-  supabaseAnonKey: "",
+  sheetUrl: "",
 };
