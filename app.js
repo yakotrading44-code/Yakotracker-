@@ -278,7 +278,8 @@ async function openApp() {
 
 async function reload() {
   const { transactions, shipments, prices = [] } = await Store.listAll();
-  state.prices = prices.map((x) => ({ ...x, month: String(x.month || "").slice(0, 7), price: Number(x.price) || 0, cost: x.cost === null || x.cost === "" || x.cost === undefined ? null : Number(x.cost) }));
+  const numOrNull = (v) => (v === null || v === "" || v === undefined ? null : Number(v));
+  state.prices = prices.map((x) => ({ ...x, month: String(x.month || "").slice(0, 7), price: Number(x.price) || 0, cost: numOrNull(x.cost), cost_rmb: numOrNull(x.cost_rmb), rate: numOrNull(x.rate) }));
   state.transactions = transactions.map((t) => ({ ...t, amount: Number(t.amount), rate: Number(t.rate) || 1, amount_ghs: Number(t.amount_ghs), date: String(t.date || "") }));
   state.shipments = shipments;
   renderAll();
@@ -791,13 +792,15 @@ function renderPrices() {
     const profit = x.cost === null ? null : round2(x.price - x.cost);
     return `<tr data-i="${i}">
       <td class="col-item">${esc(x.item)}</td>
-      <td class="num"><b>${fmt.format(x.price)}</b></td>
+      <td class="num">${amt(x.cost_rmb)}</td>
+      <td class="num">${x.cost_rmb === null || x.rate === null ? `<span class="dash">—</span>` : esc(x.rate)}</td>
       <td class="num">${amt(x.cost)}</td>
+      <td class="num"><b>${fmt.format(x.price)}</b></td>
       <td class="num ${profit === null ? "" : profit >= 0 ? "pos" : "neg"}">${amt(profit)}</td>
       <td class="num">${profit === null || !x.price ? "—" : Math.round((profit / x.price) * 100) + "%"}</td>
       <td>${esc(x.notes || "")}</td>
     </tr>`;
-  }).join("") || `<tr><td colspan="6" class="empty">${all.length ? "No items match your search." : `No items for ${esc(monthName(month))} yet. Tap <b>+ Add item</b>.`}</td></tr>`;
+  }).join("") || `<tr><td colspan="8" class="empty">${all.length ? "No items match your search." : `No items for ${esc(monthName(month))} yet. Tap <b>+ Add item</b>.`}</td></tr>`;
   $("#prices-info").textContent = all.length ? `${all.length} item${all.length === 1 ? "" : "s"} for ${monthName(month)}. Tap an item to see or change it.` : "";
   $("#prices-body").querySelectorAll("tr[data-i]").forEach((tr) => (tr.onclick = () => openPriceView(list[tr.dataset.i])));
 }
@@ -808,7 +811,7 @@ $("#price-search").oninput = renderPrices;
 async function copyPrices(from, to) {
   const items = pricesFor(from);
   if (!confirm(`Copy ${items.length} items from ${monthName(from)} to ${monthName(to)}? You can change the prices after.`)) return;
-  const rows = items.map(({ item, price, cost, notes }) => ({ month: to, item, price, cost, notes }));
+  const rows = items.map(({ item, price, cost, cost_rmb, rate, notes }) => ({ month: to, item, price, cost, cost_rmb, rate, notes }));
   try {
     if (Store.insertMany) await Store.insertMany("prices", rows);
     else for (const r of rows) await Store.insert("prices", r);
@@ -826,6 +829,7 @@ function openPriceView(x) {
     <dt>Month</dt><dd>${esc(monthName(x.month))}</dd>
     <dt>Item</dt><dd>${esc(x.item)}</dd>
     <dt>Selling price</dt><dd><b>${money(x.price)}</b></dd>
+    ${x.cost_rmb !== null ? `<dt>Cost in yuan</dt><dd>¥ ${fmt.format(x.cost_rmb)} @ ${esc(x.rate)}</dd>` : ""}
     <dt>Cost</dt><dd>${x.cost === null ? "—" : money(x.cost)}</dd>
     <dt>Profit each</dt><dd class="${profit === null ? "" : profit >= 0 ? "pos" : "neg"}">${profit === null ? "—" : money(profit)}</dd>
     ${x.notes ? `<dt>Notes</dt><dd>${esc(x.notes)}</dd>` : ""}
@@ -849,8 +853,30 @@ function updatePriceProfit() {
     ? `Profit each: <b class="${price - cost >= 0 ? "pos" : "neg"}">${money(price - cost)}</b> (${Math.round(((price - cost) / price) * 100)}% margin)`
     : "";
 }
+// converter: yuan × rate fills in the cedi cost
+function convertCost() {
+  const rmb = priceForm.cost_rmb.value;
+  const rate = Number(priceForm.rate.value);
+  if (rmb !== "" && rate > 0) priceForm.cost.value = round2(Number(rmb) * rate).toFixed(2);
+  updatePriceProfit();
+}
+priceForm.cost_rmb.oninput = convertCost;
+priceForm.rate.oninput = convertCost;
 priceForm.price.oninput = updatePriceProfit;
-priceForm.cost.oninput = updatePriceProfit;
+priceForm.cost.oninput = () => {
+  // typing a cedi cost directly means it no longer comes from the yuan amount
+  priceForm.cost_rmb.value = "";
+  updatePriceProfit();
+};
+
+$("#price-rate").value = rates().RMB;
+$("#price-rate").onchange = () => {
+  const v = Number($("#price-rate").value);
+  if (!(v > 0)) return;
+  Settings.set("rates", { ...rates(), RMB: v });
+  $("#rate-rmb").value = v;
+  toast("Yuan rate saved for new items");
+};
 
 function openPrice(x) {
   editingPrice = x || null;
@@ -862,6 +888,8 @@ function openPrice(x) {
   priceForm.item.value = x?.item || "";
   priceForm.price.value = x?.price ?? "";
   priceForm.cost.value = x?.cost ?? "";
+  priceForm.cost_rmb.value = x?.cost_rmb ?? "";
+  priceForm.rate.value = x?.rate ?? rates().RMB;
   priceForm.notes.value = x?.notes || "";
   updatePriceProfit();
   priceDialog.showModal();
@@ -877,6 +905,8 @@ priceForm.onsubmit = async (e) => {
     item: f.item.value.trim(),
     price: round2(f.price.value),
     cost: f.cost.value === "" ? null : round2(f.cost.value),
+    cost_rmb: f.cost_rmb.value === "" ? null : round2(f.cost_rmb.value),
+    rate: f.cost_rmb.value === "" ? null : Number(f.rate.value) || null,
     notes: f.notes.value.trim() || null,
   };
   try {
@@ -1035,6 +1065,7 @@ function renderSettings() {
 $("#rates-form").onsubmit = (e) => {
   e.preventDefault();
   Settings.set("rates", { USD: Number($("#rate-usd").value) || 0, RMB: Number($("#rate-rmb").value) || 0 });
+  $("#price-rate").value = rates().RMB;
   toast("Rates saved");
 };
 

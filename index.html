@@ -6,8 +6,8 @@
   <meta http-equiv="Cache-Control" content="no-cache">
   <meta name="theme-color" content="#0f5132">
   <title>Yako Trading Tracker</title>
-  <link rel="stylesheet" href="style.css?v=202611021503">
-  <script src="config.js?v=202611021503"></script>
+  <link rel="stylesheet" href="style.css?v=202611021534">
+  <script src="config.js?v=202611021534"></script>
   <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -124,6 +124,7 @@
         <p class="muted">What you're selling this month and at what price.</p>
         <div class="row gap wrap">
           <label class="pager-size">Month <input type="month" id="price-month"></label>
+          <label class="pager-size">Rate: 1 ¥ = GH₵ <input type="number" id="price-rate" step="0.0001" min="0" style="width:6.5rem"></label>
           <input type="search" id="price-search" placeholder="Search items…" style="flex:1;min-width:160px">
         </div>
         <div id="price-copy-box" class="panel" hidden>
@@ -133,7 +134,7 @@
         <div class="table-wrap">
           <table class="rec-table price-table">
             <thead>
-              <tr><th>Item</th><th class="num">Selling price (GH₵)</th><th class="num">Cost (GH₵)</th><th class="num">Profit each (GH₵)</th><th class="num">Margin</th><th>Notes</th></tr>
+              <tr><th>Item</th><th class="num">Cost (¥)</th><th class="num">Rate</th><th class="num">Cost (GH₵)</th><th class="num">Selling price (GH₵)</th><th class="num">Profit each (GH₵)</th><th class="num">Margin</th><th>Notes</th></tr>
             </thead>
             <tbody id="prices-body"></tbody>
           </table>
@@ -282,10 +283,15 @@
       <h3 id="price-title">Add item</h3>
       <label>Month <input type="month" name="month" required></label>
       <label>Item name <input type="text" name="item" required placeholder="e.g. Smart Watch"></label>
-      <div class="row gap">
-        <label class="grow">Selling price (GH₵) <input type="number" name="price" step="0.01" min="0" required></label>
-        <label class="grow">Cost (GH₵, optional) <input type="number" name="cost" step="0.01" min="0"></label>
-      </div>
+      <fieldset class="converter">
+        <legend>Cost converter (¥ → GH₵)</legend>
+        <div class="row gap">
+          <label class="grow">Cost in yuan (¥) <input type="number" name="cost_rmb" step="0.01" min="0" placeholder="e.g. 22"></label>
+          <label class="grow">Rate: 1 ¥ = GH₵ <input type="number" name="rate" step="0.0001" min="0"></label>
+        </div>
+        <label>Cost in GH₵ <input type="number" name="cost" step="0.01" min="0" placeholder="Fills in from yuan, or type it"></label>
+      </fieldset>
+      <label>Selling price (GH₵) <input type="number" name="price" step="0.01" min="0" required></label>
       <p class="muted" id="price-profit"></p>
       <label>Notes <input type="text" name="notes" placeholder="e.g. colours: black, pink"></label>
       <p id="price-msg" class="msg"></p>
@@ -329,6 +335,6 @@
   </dialog>
 
   <div id="toast" class="toast" hidden></div>
-  <script src="app.js?v=202611021503"></script>
+  <script src="app.js?v=202611021534"></script>
 </body>
 </html>

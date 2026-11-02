@@ -58,6 +58,8 @@ const TABLES = {
       ['item', 'Item'],
       ['price', 'Selling price (GHS)'],
       ['cost', 'Cost (GHS)'],
+      ['cost_rmb', 'Cost (RMB)'],
+      ['rate', 'Rate (GHS per RMB)'],
       ['notes', 'Notes'],
       ['created_at', 'Created'],
     ],
