@@ -6,8 +6,8 @@
   <meta http-equiv="Cache-Control" content="no-cache">
   <meta name="theme-color" content="#0f5132">
   <title>Yako Trading Tracker</title>
-  <link rel="stylesheet" href="style.css?v=202610250648">
-  <script src="config.js?v=202610250648"></script>
+  <link rel="stylesheet" href="style.css?v=202611021503">
+  <script src="config.js?v=202611021503"></script>
   <script src="vendor/chart.umd.js"></script>
 </head>
 <body>
@@ -115,6 +115,32 @@
         </div>
       </div>
 
+      <!-- Price list -->
+      <div id="tab-prices" class="tab" hidden>
+        <div class="row between wrap">
+          <h2>Price list</h2>
+          <button class="btn primary small" id="add-price">+ Add item</button>
+        </div>
+        <p class="muted">What you're selling this month and at what price.</p>
+        <div class="row gap wrap">
+          <label class="pager-size">Month <input type="month" id="price-month"></label>
+          <input type="search" id="price-search" placeholder="Search items…" style="flex:1;min-width:160px">
+        </div>
+        <div id="price-copy-box" class="panel" hidden>
+          <p style="margin:0 0 .5rem">No items for this month yet. Start from last month's list?</p>
+          <button class="btn small" id="price-copy">Copy <span id="price-copy-count"></span> items from <span id="price-copy-from"></span></button>
+        </div>
+        <div class="table-wrap">
+          <table class="rec-table price-table">
+            <thead>
+              <tr><th>Item</th><th class="num">Selling price (GH₵)</th><th class="num">Cost (GH₵)</th><th class="num">Profit each (GH₵)</th><th class="num">Margin</th><th>Notes</th></tr>
+            </thead>
+            <tbody id="prices-body"></tbody>
+          </table>
+        </div>
+        <p class="muted small-note" id="prices-info"></p>
+      </div>
+
       <!-- Shipments -->
       <div id="tab-shipments" class="tab" hidden>
         <div class="row between wrap">
@@ -179,6 +205,7 @@
     <nav class="tabbar">
       <button data-tab="dashboard" class="active">📊<span>Overview</span></button>
       <button data-tab="records">📒<span>Records</span></button>
+      <button data-tab="prices">🏷️<span>Prices</span></button>
       <button data-tab="shipments">🚢<span>Shipments</span></button>
       <button data-tab="settings">⚙️<span>Settings</span></button>
     </nav>
@@ -195,7 +222,7 @@
       </div>
       <label>Date <input type="date" name="date" required></label>
       <label id="category-row">Category <select name="category"></select></label>
-      <label>Description <input type="text" name="description" placeholder="e.g. 200 cartons of cups, Yiwu supplier"></label>
+      <label>Description <input type="text" name="description" list="price-items" placeholder="e.g. 200 cartons of cups, Yiwu supplier"></label>
       <div class="row gap">
         <label class="grow"><span id="amount-label">Amount</span> <input type="number" name="amount" step="0.01" min="0" required></label>
         <label>Currency
@@ -211,6 +238,7 @@
       <label>Shipment <select name="shipment_id"><option value="">— None —</option></select></label>
       <label>Client / customer <input type="text" name="client" list="client-list" placeholder="e.g. Philip, Hellen Korley"></label>
       <datalist id="client-list"></datalist>
+      <datalist id="price-items"></datalist>
       <p id="record-msg" class="msg"></p>
       <div class="row between">
         <button type="button" class="btn danger small" id="record-delete" hidden>Delete</button>
@@ -248,6 +276,29 @@
     </form>
   </dialog>
 
+  <!-- Price list item form -->
+  <dialog id="price-dialog">
+    <form id="price-form" class="stack">
+      <h3 id="price-title">Add item</h3>
+      <label>Month <input type="month" name="month" required></label>
+      <label>Item name <input type="text" name="item" required placeholder="e.g. Smart Watch"></label>
+      <div class="row gap">
+        <label class="grow">Selling price (GH₵) <input type="number" name="price" step="0.01" min="0" required></label>
+        <label class="grow">Cost (GH₵, optional) <input type="number" name="cost" step="0.01" min="0"></label>
+      </div>
+      <p class="muted" id="price-profit"></p>
+      <label>Notes <input type="text" name="notes" placeholder="e.g. colours: black, pink"></label>
+      <p id="price-msg" class="msg"></p>
+      <div class="row between">
+        <button type="button" class="btn danger small" id="price-delete" hidden>Delete</button>
+        <div class="row gap">
+          <button type="button" class="btn small" data-close>Cancel</button>
+          <button type="submit" class="btn primary small">Save</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
   <!-- Shipment form -->
   <dialog id="shipment-dialog">
     <form id="shipment-form" method="dialog" class="stack">
@@ -278,6 +329,6 @@
   </dialog>
 
   <div id="toast" class="toast" hidden></div>
-  <script src="app.js?v=202610250648"></script>
+  <script src="app.js?v=202611021503"></script>
 </body>
 </html>

@@ -30,6 +30,7 @@ const $$ = (sel) => [...document.querySelectorAll(sel)];
 const state = {
   transactions: [],
   shipments: [],
+  prices: [],
   user: null,
   charts: {},
 };
@@ -89,7 +90,7 @@ const LocalStore = {
     localStorage.setItem("yako_" + table, JSON.stringify(rows));
   },
   async listAll() {
-    return { transactions: this.read("transactions"), shipments: this.read("shipments") };
+    return { transactions: this.read("transactions"), shipments: this.read("shipments"), prices: this.read("prices") };
   },
   async insert(table, row) {
     const rows = this.read(table);
@@ -146,7 +147,7 @@ function makeSheetStore(url, passcode) {
     mode: "cloud",
     async listAll() {
       const d = await call("list");
-      return { transactions: d.transactions, shipments: d.shipments };
+      return { transactions: d.transactions, shipments: d.shipments, prices: d.prices || [] };
     },
     async insert(table, row) {
       return (await call("insert", { table, row })).rows[0];
@@ -276,7 +277,8 @@ async function openApp() {
 }
 
 async function reload() {
-  const { transactions, shipments } = await Store.listAll();
+  const { transactions, shipments, prices = [] } = await Store.listAll();
+  state.prices = prices.map((x) => ({ ...x, month: String(x.month || "").slice(0, 7), price: Number(x.price) || 0, cost: x.cost === null || x.cost === "" || x.cost === undefined ? null : Number(x.cost) }));
   state.transactions = transactions.map((t) => ({ ...t, amount: Number(t.amount), rate: Number(t.rate) || 1, amount_ghs: Number(t.amount_ghs), date: String(t.date || "") }));
   state.shipments = shipments;
   renderAll();
@@ -297,6 +299,7 @@ function renderAll() {
   renderDashboard();
   renderRecords();
   renderShipments();
+  renderPrices();
 }
 
 // ---------- calculations ----------
@@ -626,6 +629,7 @@ function openRecord(rec, defaults = {}) {
   recForm.client.value = r.client || "";
   fillShipments(r.shipment_id);
   setType(r.type, r.category);
+  fillPriceSuggestions();
   recDialog.showModal();
 }
 
@@ -754,6 +758,168 @@ $("#admin-lock").onclick = () => {
   toast("Editing locked");
 };
 $$("[data-close]").forEach((b) => (b.onclick = () => b.closest("dialog").close()));
+
+// ---------- price list ----------
+
+const thisMonth = () => new Date().toISOString().slice(0, 7);
+const prevMonth = (m) => {
+  const [y, mo] = m.split("-").map(Number);
+  return new Date(Date.UTC(y, mo - 2, 1)).toISOString().slice(0, 7);
+};
+const monthName = (m) => new Date(m + "-01T00:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+const pricesFor = (m) => state.prices.filter((x) => x.month === m).sort((a, b) => String(a.item).localeCompare(String(b.item)));
+
+$("#price-month").value = thisMonth();
+
+function renderPrices() {
+  const month = $("#price-month").value || thisMonth();
+  const q = $("#price-search").value.trim().toLowerCase();
+  const all = pricesFor(month);
+  const list = all.filter((x) => !q || [x.item, x.notes].some((v) => String(v || "").toLowerCase().includes(q)));
+
+  // offer to copy the most recent earlier month that has a list
+  const earlier = all.length ? null : [...new Set(state.prices.map((x) => x.month))].filter((m) => m < month).sort().pop();
+  $("#price-copy-box").hidden = !earlier;
+  if (earlier) {
+    $("#price-copy-from").textContent = monthName(earlier);
+    $("#price-copy-count").textContent = pricesFor(earlier).length;
+    $("#price-copy").onclick = () => copyPrices(earlier, month);
+  }
+
+  const amt = (v) => (v === null || v === undefined ? `<span class="dash">—</span>` : fmt.format(v));
+  $("#prices-body").innerHTML = list.map((x, i) => {
+    const profit = x.cost === null ? null : round2(x.price - x.cost);
+    return `<tr data-i="${i}">
+      <td class="col-item">${esc(x.item)}</td>
+      <td class="num"><b>${fmt.format(x.price)}</b></td>
+      <td class="num">${amt(x.cost)}</td>
+      <td class="num ${profit === null ? "" : profit >= 0 ? "pos" : "neg"}">${amt(profit)}</td>
+      <td class="num">${profit === null || !x.price ? "—" : Math.round((profit / x.price) * 100) + "%"}</td>
+      <td>${esc(x.notes || "")}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="6" class="empty">${all.length ? "No items match your search." : `No items for ${esc(monthName(month))} yet. Tap <b>+ Add item</b>.`}</td></tr>`;
+  $("#prices-info").textContent = all.length ? `${all.length} item${all.length === 1 ? "" : "s"} for ${monthName(month)}. Tap an item to see or change it.` : "";
+  $("#prices-body").querySelectorAll("tr[data-i]").forEach((tr) => (tr.onclick = () => openPriceView(list[tr.dataset.i])));
+}
+
+$("#price-month").oninput = renderPrices;
+$("#price-search").oninput = renderPrices;
+
+async function copyPrices(from, to) {
+  const items = pricesFor(from);
+  if (!confirm(`Copy ${items.length} items from ${monthName(from)} to ${monthName(to)}? You can change the prices after.`)) return;
+  const rows = items.map(({ item, price, cost, notes }) => ({ month: to, item, price, cost, notes }));
+  try {
+    if (Store.insertMany) await Store.insertMany("prices", rows);
+    else for (const r of rows) await Store.insert("prices", r);
+    toast("Price list copied");
+    await reload();
+  } catch (err) {
+    alert("Could not copy: " + err.message);
+  }
+}
+
+function openPriceView(x) {
+  const profit = x.cost === null ? null : round2(x.price - x.cost);
+  $("#view-title").textContent = "Price list item";
+  $("#view-body").innerHTML = `<dl class="details">
+    <dt>Month</dt><dd>${esc(monthName(x.month))}</dd>
+    <dt>Item</dt><dd>${esc(x.item)}</dd>
+    <dt>Selling price</dt><dd><b>${money(x.price)}</b></dd>
+    <dt>Cost</dt><dd>${x.cost === null ? "—" : money(x.cost)}</dd>
+    <dt>Profit each</dt><dd class="${profit === null ? "" : profit >= 0 ? "pos" : "neg"}">${profit === null ? "—" : money(profit)}</dd>
+    ${x.notes ? `<dt>Notes</dt><dd>${esc(x.notes)}</dd>` : ""}
+  </dl>`;
+  $("#view-edit").textContent = Admin.unlocked() ? "Edit" : "🔒 Edit";
+  $("#view-edit").onclick = async () => {
+    $("#view-dialog").close();
+    if (await Admin.require()) openPrice(x);
+  };
+  $("#view-dialog").showModal();
+}
+
+const priceDialog = $("#price-dialog");
+const priceForm = $("#price-form");
+let editingPrice = null;
+
+function updatePriceProfit() {
+  const price = Number(priceForm.price.value);
+  const cost = priceForm.cost.value === "" ? null : Number(priceForm.cost.value);
+  $("#price-profit").innerHTML = price && cost !== null
+    ? `Profit each: <b class="${price - cost >= 0 ? "pos" : "neg"}">${money(price - cost)}</b> (${Math.round(((price - cost) / price) * 100)}% margin)`
+    : "";
+}
+priceForm.price.oninput = updatePriceProfit;
+priceForm.cost.oninput = updatePriceProfit;
+
+function openPrice(x) {
+  editingPrice = x || null;
+  priceForm.reset();
+  $("#price-msg").textContent = "";
+  $("#price-title").textContent = x ? "Edit item" : "Add item";
+  $("#price-delete").hidden = !x;
+  priceForm.month.value = x?.month || $("#price-month").value || thisMonth();
+  priceForm.item.value = x?.item || "";
+  priceForm.price.value = x?.price ?? "";
+  priceForm.cost.value = x?.cost ?? "";
+  priceForm.notes.value = x?.notes || "";
+  updatePriceProfit();
+  priceDialog.showModal();
+}
+
+$("#add-price").onclick = () => openPrice(null);
+
+priceForm.onsubmit = async (e) => {
+  e.preventDefault();
+  const f = priceForm;
+  const row = {
+    month: f.month.value,
+    item: f.item.value.trim(),
+    price: round2(f.price.value),
+    cost: f.cost.value === "" ? null : round2(f.cost.value),
+    notes: f.notes.value.trim() || null,
+  };
+  try {
+    if (editingPrice) await Store.update("prices", editingPrice.id, row);
+    else await Store.insert("prices", row);
+    priceDialog.close();
+    toast("Saved");
+    $("#price-month").value = row.month;
+    await reload();
+  } catch (err) {
+    if (err.code === "admin") Admin.set("");
+    $("#price-msg").textContent = "Could not save: " + err.message;
+  }
+};
+
+$("#price-delete").onclick = async () => {
+  if (!editingPrice || !confirm("Delete this item from the price list?")) return;
+  try {
+    await Store.remove("prices", editingPrice.id);
+    priceDialog.close();
+    toast("Deleted");
+    await reload();
+  } catch (err) {
+    if (err.code === "admin") Admin.set("");
+    $("#price-msg").textContent = "Could not delete: " + err.message;
+  }
+};
+
+// Sale form: suggest items from that month's price list and fill in the price.
+function fillPriceSuggestions() {
+  const month = (recForm.date.value || today()).slice(0, 7);
+  $("#price-items").innerHTML = pricesFor(month).map((x) => `<option value="${esc(x.item)}">${esc(money(x.price))}</option>`).join("");
+}
+recForm.date.addEventListener("input", fillPriceSuggestions);
+recForm.description.addEventListener("input", () => {
+  const month = (recForm.date.value || today()).slice(0, 7);
+  const name = recForm.description.value.trim().toLowerCase();
+  const x = pricesFor(month).find((p) => String(p.item).trim().toLowerCase() === name);
+  if (!x || formType() !== "sale") return;
+  if (!recForm.paid.value) recForm.paid.value = x.price;
+  if (!recForm.amount.value && x.cost !== null && recForm.currency.value === "GHS") recForm.amount.value = x.cost;
+  updateRatePreview();
+});
 
 // ---------- shipments ----------
 

@@ -50,10 +50,22 @@ const TABLES = {
       ['created_at', 'Created'],
     ],
   },
+  prices: {
+    sheet: 'Price List',
+    columns: [
+      ['id', 'ID'],
+      ['month', 'Month'],
+      ['item', 'Item'],
+      ['price', 'Selling price (GHS)'],
+      ['cost', 'Cost (GHS)'],
+      ['notes', 'Notes'],
+      ['created_at', 'Created'],
+    ],
+  },
 };
 
 // Kept as plain text so Sheets doesn't reformat them.
-const TEXT_FIELDS = ['id', 'date', 'order_date', 'arrival_date', 'shipment_id', 'created_at'];
+const TEXT_FIELDS = ['id', 'date', 'order_date', 'arrival_date', 'shipment_id', 'month', 'created_at'];
 
 function doGet() {
   return json({ ok: true, app: 'yako-tracker' });
@@ -77,7 +89,7 @@ function doPost(e) {
       case 'checkAdmin':
         return json({ ok: true });
       case 'list':
-        return json({ ok: true, transactions: readAll('transactions'), shipments: readAll('shipments') });
+        return json({ ok: true, transactions: readAll('transactions'), shipments: readAll('shipments'), prices: readAll('prices') });
       case 'insert':
         return json({ ok: true, rows: insertRows(req.table, req.rows || [req.row]) });
       case 'update':
@@ -135,6 +147,7 @@ function getSheet(table) {
 
 function cellOut(field, v, tz) {
   if (v instanceof Date) {
+    if (field === 'month') return Utilities.formatDate(v, tz, 'yyyy-MM');
     return field === 'created_at' ? v.toISOString() : Utilities.formatDate(v, tz, 'yyyy-MM-dd');
   }
   if (v === '') return null;
